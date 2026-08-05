@@ -161,6 +161,17 @@ Standing of the three architectures going into the hardware phase:
 The manual hardware plan (now 16 tests) decides. No production dependency is approved by
 this report.
 
+## Hardware results so far
+
+Partial M1B hardware results are recorded in `M1B-RESULTS.md`
+(`M1B HARDWARE VALIDATION — PARTIAL PASS, PAUSED BY OWNER`,
+`NO BACKEND DECISION — REMAINING HARDWARE TESTS REQUIRED`). Notably: a `PORT_BUSY`
+classification divergence under contention (serialport reported `PORT_NOT_FOUND`,
+serial2 reported `PORT_BUSY`), comparable read-timeout accuracy, and a
+clone-handle diagnostic on serialport where dropping the original did not cancel
+the clone's in-flight read. serial2 clone-handle, replug/renumber and process-kill
+remain pending.
+
 ## What must not be concluded from this spike
 
 - That either library works with a flight controller. No hardware has been connected.
