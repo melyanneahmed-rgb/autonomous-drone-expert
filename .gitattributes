@@ -1,0 +1,15 @@
+# Line endings are normalised to LF in the repository and on checkout on every
+# platform. Without this, a Windows checkout converts LF to CRLF and
+# `cargo fmt --check` fails against rustfmt.toml's `newline_style = "Unix"`.
+# Pinning the ending here keeps Windows and Linux byte-identical, which is what the
+# Windows-first strategy in ADR-0002 requires.
+* text=auto eol=lf
+
+# Binary assets are never converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
