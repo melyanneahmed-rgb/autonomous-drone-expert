@@ -2,21 +2,32 @@
 
 //! # `m1b` — interactive Windows hardware validation runner
 //!
-//! **READ-ONLY BY CONSTRUCTION.** This binary contains **no code path that writes bytes
-//! to any port**: it never calls `write_some`, `write_all_with_deadline`, `flush`, or
-//! any discard/purge function. It enumerates, opens, reads, and closes. Nothing else.
+//! **NO PAYLOAD-BYTE WRITES BY CONSTRUCTION.** This binary:
 //!
-//! It is spike code for milestone M1B and must never be merged into `main`.
+//! - enumerates ports,
+//! - opens a port (applying baud and timeout configuration),
+//! - reads,
+//! - closes.
 //!
-//! Honesty notes printed to the operator:
-//! - Opening a serial port asserts control lines (DTR/RTS) exactly as every serial tool
-//!   does, including the official configurators. That is a line state, not data.
-//! - The board's identity is recorded from USB descriptors only. Firmware identity is
-//!   `UNKNOWN — MSP PROHIBITED IN M1B`.
+//! It does **not** perform: `write`, `write_all`, `flush`, purge/discard of driver
+//! buffers, MSP, or CLI. No payload byte is ever sent to the device.
+//!
+//! **Opening a port is NOT assumed to be side-effect-free.** Opening a serial port may
+//! change driver configuration or control-line state depending on the backend, the
+//! operating system and the device driver. M1B sends no payload bytes, but any reset,
+//! disconnect, LED change or COM re-enumeration observed around an open must be
+//! recorded. DTR/RTS are never used as a test command in M1B (this binary never calls
+//! any DTR/RTS setter); whether and how each backend or the Windows driver alters
+//! control-line state on open is itself `HARDWARE_OBSERVED` material, and `serialport`
+//! 4.9.0 is **not assumed** to assert DTR automatically.
+//!
+//! Spike code for milestone M1B. Must never be merged into `main`.
+//!
+//! Board identity is recorded from USB descriptors only. Firmware identity is
+//! `UNKNOWN — MSP PROHIBITED IN M1B`.
 //!
 //! Every port-opening command requires `--confirm-usb-only`, by which the operator
-//! attests: LiPo disconnected, USB the only power source, no other serial application
-//! open, propellers treated as live.
+//! attests the full safety gate printed below.
 
 use std::collections::BTreeMap;
 use std::io::Read as _;
@@ -31,12 +42,21 @@ use spike_windows_serial_transport::reconnect;
 use spike_windows_serial_transport::{OpenConfig, PortInfo, SpikeTransport, TransportError};
 
 const SAFETY: &str = "\
-SAFETY GATE — M1B\n\
-  * LiPo battery DISCONNECTED. USB is the only power source.\n\
-  * No Betaflight Configurator, SpeedyBee App, or any other serial tool running.\n\
-  * Propellers are installed on this aircraft: treat them as live anyway.\n\
-  * This tool is read-only: it never sends a byte to the board.\n\
-  * Opening a port asserts DTR/RTS line state (as every serial tool does). No data.\n";
+SAFETY GATE - M1B (attested by --confirm-usb-only)\n\
+  * LiPo battery DISCONNECTED and moved away from the aircraft.\n\
+  * ALL propellers REMOVED (mandatory from step 2A onward; enumeration-only steps\n\
+    may precede removal).\n\
+  * Betaflight Configurator and SpeedyBee App are CLOSED; any SpeedyBee phone or\n\
+    Bluetooth link is disabled.\n\
+  * USB is the only connection and the only power source.\n\
+  * The aircraft is secured on a stable surface.\n\
+  * This tool performs NO payload-byte writes: it enumerates, opens (applying\n\
+    baud/timeout), reads, and closes. No write/write_all/flush/purge/discard,\n\
+    no MSP, no CLI.\n\
+  * Opening a serial port may change driver configuration or control-line state\n\
+    depending on the backend, operating system and device driver. M1B sends no\n\
+    payload bytes, but opening the port is NOT assumed to be side-effect-free.\n\
+    Record any reset, disconnect, LED change or COM re-enumeration.\n";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,12 +69,13 @@ fn main() {
     let result = match cmd {
         "enumerate" => cmd_enumerate(),
         "watch" => cmd_watch(&flags),
+        "single-open" => gated(&flags, cmd_single_open),
         "open-close" => gated(&flags, cmd_open_close),
         "hold" => gated(&flags, cmd_hold),
         "busy" => gated(&flags, cmd_busy),
         "read-timeout" => gated(&flags, cmd_read_timeout),
         "unplug-read" => gated(&flags, cmd_unplug_read),
-        "drop-cancel" => gated(&flags, cmd_drop_cancel),
+        "drop-original-while-clone-reads" => gated(&flags, cmd_drop_original),
         _ => {
             print_help();
             Ok(())
@@ -75,12 +96,13 @@ fn print_help() {
         "commands:\n\
          enumerate                                  list ports via both backends (no open)\n\
          watch [--interval-ms 1000]                 poll enumeration, print deltas (no open)\n\
+         single-open --port COMx --backend B --confirm-usb-only    step 2A observation\n\
          open-close  --port COMx --backend B --cycles N --confirm-usb-only\n\
          hold        --port COMx --backend B --hold-secs N --confirm-usb-only\n\
          busy        --port COMx --confirm-usb-only\n\
          read-timeout --port COMx --backend B --timeout-ms 250 --samples 100 --confirm-usb-only\n\
          unplug-read --port COMx --backend B --confirm-usb-only\n\
-         drop-cancel --port COMx --backend B --confirm-usb-only\n\
+         drop-original-while-clone-reads --port COMx --backend B --confirm-usb-only\n\
          (B = serialport | serial2)"
     );
 }
@@ -133,6 +155,15 @@ fn num(flags: &Flags, key: &str, default: u64) -> u64 {
 enum Backend {
     Serialport,
     Serial2,
+}
+
+impl Backend {
+    fn name(self) -> &'static str {
+        match self {
+            Backend::Serialport => "serialport",
+            Backend::Serial2 => "serial2",
+        }
+    }
 }
 
 fn backend(flags: &Flags) -> Result<Backend, String> {
@@ -268,6 +299,38 @@ impl Opened {
     }
 }
 
+fn cmd_single_open(flags: &Flags) -> Result<(), String> {
+    let port = need(flags, "port")?;
+    let which = backend(flags)?;
+    println!(
+        "[HW_RUN] STEP 2A :: single-open observation :: backend={} :: WATCH the board \
+         and Device Manager during the next few seconds",
+        which.name()
+    );
+    let started = Instant::now();
+    let handle = open_by(which, port, config(Duration::from_millis(250)))
+        .map_err(|e| format!("open failed: {e}"))?;
+    println!(
+        "[HW_RUN] t={:?} :: port OPEN (dwelling 3s — observe now)",
+        started.elapsed()
+    );
+    thread::sleep(Duration::from_secs(3));
+    handle.close().map_err(|e| e.to_string())?;
+    println!("[HW_RUN] t={:?} :: port CLOSED", started.elapsed());
+    println!(
+        "[HW_RUN] OBSERVE AND REPORT — answer each item:\n\
+         [HW_RUN]   1. Did any LED restart or change its pattern?\n\
+         [HW_RUN]   2. Did the COM port disappear from Device Manager and return?\n\
+         [HW_RUN]   3. Did the COM number change?\n\
+         [HW_RUN]   4. Did a DFU device appear?\n\
+         [HW_RUN]   5. Any sound or any change in board behaviour?\n\
+         [HW_RUN] If ANY unexpected reboot or re-enumeration occurred: STOP M1B.\n\
+         [HW_RUN] Classification in that case: UNEXPECTED OPEN SIDE EFFECT — \
+         INVESTIGATION REQUIRED. Do NOT run the 20-cycle step."
+    );
+    Ok(())
+}
+
 fn cmd_open_close(flags: &Flags) -> Result<(), String> {
     let port = need(flags, "port")?;
     let which = backend(flags)?;
@@ -312,9 +375,12 @@ fn cmd_hold(flags: &Flags) -> Result<(), String> {
     let mut buf = [0u8; 256];
     while started.elapsed() < Duration::from_secs(secs) {
         match handle.read(&mut buf) {
-            Ok(n) if n > 0 => {
-                println!("[HW_RUN] board sent {n} unsolicited byte(s) — recorded, not answered")
-            }
+            Ok(n) if n > 0 => println!(
+                "[HW_RUN] t={:?} :: backend={} :: unsolicited data event: {n} byte(s) \
+                 (content not recorded)",
+                started.elapsed(),
+                which.name()
+            ),
             Ok(_) => {}
             Err(TransportError::ReadTimeout) => {}
             Err(e) => {
@@ -362,7 +428,7 @@ fn cmd_busy(flags: &Flags) -> Result<(), String> {
                     .unwrap_or_else(|| "opened?!".into())
             );
             holder.close().map_err(|e| e.to_string())?;
-            println!("[HW_RUN] holder released; expected classification is PORT_BUSY on both");
+            println!("[HW_RUN] holder released; record the classifications observed");
         }
     }
     Ok(())
@@ -378,17 +444,21 @@ fn cmd_read_timeout(flags: &Flags) -> Result<(), String> {
     let mut buf = [0u8; 256];
     let mut elapsed_ms: Vec<f64> = Vec::new();
     let mut data_events = 0u64;
+    let mut data_bytes = 0u64;
     let mut other_errors = 0u64;
+    let total_started = Instant::now();
 
     for _ in 0..samples {
         let started = Instant::now();
         match handle.read(&mut buf) {
             Ok(n) if n > 0 => {
                 data_events += 1;
-                let shown = n.min(16);
+                data_bytes += n as u64;
                 println!(
-                    "[HW_RUN] unsolicited data: {n} byte(s), first {shown}: {:02x?}",
-                    &buf[..shown]
+                    "[HW_RUN] t={:?} :: backend={} :: unsolicited data event: {n} byte(s) \
+                     (content not recorded)",
+                    total_started.elapsed(),
+                    which.name()
                 );
             }
             Ok(_) => {}
@@ -397,7 +467,10 @@ fn cmd_read_timeout(flags: &Flags) -> Result<(), String> {
             }
             Err(e) => {
                 other_errors += 1;
-                println!("[HW_RUN] non-timeout error during sampling :: {e}");
+                println!(
+                    "[HW_RUN] t={:?} :: non-timeout error during sampling :: {e}",
+                    total_started.elapsed()
+                );
             }
         }
     }
@@ -407,18 +480,19 @@ fn cmd_read_timeout(flags: &Flags) -> Result<(), String> {
     if elapsed_ms.is_empty() {
         println!(
             "[HW_RUN] no timeout samples collected (data_events={data_events}, \
-             other_errors={other_errors})"
+             data_bytes={data_bytes}, other_errors={other_errors})"
         );
     } else {
         let pick = |q: f64| elapsed_ms[((elapsed_ms.len() - 1) as f64 * q) as usize];
         println!(
-            "[HW_RUN] read-timeout accuracy over {} samples (target {:?}):",
+            "[HW_RUN] read-timeout accuracy :: backend={} :: {} samples (target {:?}):",
+            which.name(),
             elapsed_ms.len(),
             timeout
         );
         println!(
             "[HW_RUN]   min={:.1}ms median={:.1}ms p95={:.1}ms max={:.1}ms \
-             data_events={data_events} other_errors={other_errors}",
+             data_events={data_events} data_bytes={data_bytes} other_errors={other_errors}",
             elapsed_ms[0],
             pick(0.5),
             pick(0.95),
@@ -442,24 +516,29 @@ fn cmd_unplug_read(flags: &Flags) -> Result<(), String> {
     loop {
         let slice_started = Instant::now();
         match handle.read(&mut buf) {
-            Ok(n) if n > 0 => println!("[HW_RUN] data ({n} bytes) — still connected"),
-            Ok(_) => println!("[HW_RUN] zero-byte read result — recorded"),
+            Ok(n) if n > 0 => println!(
+                "[HW_RUN] t={:?} :: backend={} :: unsolicited data event: {n} byte(s) \
+                 (content not recorded) — still connected",
+                started.elapsed(),
+                which.name()
+            ),
+            Ok(_) => println!(
+                "[HW_RUN] t={:?} :: zero-byte read result — recorded",
+                started.elapsed()
+            ),
             Err(TransportError::ReadTimeout) => {
                 println!(
-                    "[HW_RUN] timeout slice ({:?} total) — still waiting",
+                    "[HW_RUN] t={:?} :: timeout slice — still waiting",
                     started.elapsed()
                 );
             }
             Err(e) => {
                 println!(
-                    "[HW_RUN] UNPLUG RESULT :: {e} :: surfaced {:?} into the slice, {:?} \
-                     after start",
+                    "[HW_RUN] UNPLUG RESULT :: backend={} :: {e} :: surfaced {:?} into \
+                     the slice, {:?} after start — record exactly what you saw",
+                    which.name(),
                     slice_started.elapsed(),
                     started.elapsed()
-                );
-                println!(
-                    "[HW_RUN] expected classification: DEVICE_DISCONNECTED — record what \
-                     you actually saw"
                 );
                 return Ok(());
             }
@@ -470,13 +549,17 @@ fn cmd_unplug_read(flags: &Flags) -> Result<(), String> {
     }
 }
 
-fn cmd_drop_cancel(flags: &Flags) -> Result<(), String> {
+fn cmd_drop_original(flags: &Flags) -> Result<(), String> {
     let port = need(flags, "port")?;
     let which = backend(flags)?;
     let long = Duration::from_secs(30);
     println!(
-        "[HW_RUN] drop-cancel: a clone blocks in read (timeout {long:?}); after 3s the \
-         ORIGINAL handle is dropped. Question: does the sibling's read return early?"
+        "[HW_RUN] drop-original-while-clone-reads :: DIAGNOSTIC ONLY.\n\
+         [HW_RUN] This does NOT test same-handle read cancellation: the read runs on a \
+         CLONE while the ORIGINAL handle is dropped at t=3s. It observes clone-handle \
+         semantics and nothing more. Same-handle thread cancellation remains \
+         UNRESOLVED — NO PUBLIC SAME-HANDLE CANCELLATION PRIMITIVE PROVEN. The outcome \
+         is NOT used for backend selection."
     );
 
     let (tx, rx) = mpsc::channel::<(String, Duration)>();
@@ -490,8 +573,10 @@ fn cmd_drop_cancel(flags: &Flags) -> Result<(), String> {
             thread::spawn(move || {
                 let mut buf = [0u8; 256];
                 let outcome = match clone.read(&mut buf) {
-                    Ok(n) => format!("read returned Ok({n})"),
-                    Err(e) => format!("read returned {}", classify_io_error(&e, Op::Read)),
+                    Ok(n) => format!("clone read returned Ok({n} bytes; content not recorded)"),
+                    Err(e) => {
+                        format!("clone read returned {}", classify_io_error(&e, Op::Read))
+                    }
                 };
                 let _ = tx.send((outcome, started.elapsed()));
             });
@@ -506,8 +591,10 @@ fn cmd_drop_cancel(flags: &Flags) -> Result<(), String> {
             thread::spawn(move || {
                 let mut buf = [0u8; 256];
                 let outcome = match clone.read(&mut buf) {
-                    Ok(n) => format!("read returned Ok({n})"),
-                    Err(e) => format!("read returned {}", classify_io_error(&e, Op::Read)),
+                    Ok(n) => format!("clone read returned Ok({n} bytes; content not recorded)"),
+                    Err(e) => {
+                        format!("clone read returned {}", classify_io_error(&e, Op::Read))
+                    }
                 };
                 let _ = tx.send((outcome, started.elapsed()));
             });
@@ -519,23 +606,22 @@ fn cmd_drop_cancel(flags: &Flags) -> Result<(), String> {
 
     match rx.recv_timeout(long + Duration::from_secs(10)) {
         Ok((outcome, at)) => {
-            println!("[HW_RUN] DROP-CANCEL RESULT :: {outcome} at t={at:?}");
-            if at < Duration::from_secs(28) {
-                println!(
-                    "[HW_RUN] interpretation: closing the sibling handle ENDED the read \
-                     early — a viable cancellation architecture on this backend"
-                );
+            let observation = if at < Duration::from_secs(28) {
+                "clone read returned early"
             } else {
-                println!(
-                    "[HW_RUN] interpretation: the read ran to its own timeout — sibling \
-                     close does NOT cancel; timeout-only architecture confirmed here"
-                );
-            }
+                "clone read reached its own timeout"
+            };
+            println!("[HW_RUN] RESULT :: {outcome} at t={at:?}");
+            println!("[HW_RUN] observation: {observation}");
         }
-        Err(_) => println!(
-            "[HW_RUN] DROP-CANCEL RESULT :: read did not return even after timeout + 10s \
-             — the worker is stuck; this is the worst outcome and must be recorded"
-        ),
+        Err(_) => {
+            println!("[HW_RUN] RESULT :: no return within timeout + 10s");
+            println!("[HW_RUN] observation: clone read remained stuck");
+        }
     }
+    println!(
+        "[HW_RUN] classification: HARDWARE_OBSERVED — CLONE HANDLE SEMANTICS ONLY \
+         (diagnostic; not used for backend selection)"
+    );
     Ok(())
 }
