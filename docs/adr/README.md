@@ -12,6 +12,7 @@ rejected and why, and the consequences.
 | [ADR-0005](ADR-0005-recovery-classes-and-state-unknown.md) | Recovery Classes and State Unknown | Accepted |
 | [ADR-0006](ADR-0006-first-beeper-vertical-slice-contract.md) | First Beeper Vertical Slice Contract | Accepted (documentation only) |
 | [ADR-0007](ADR-0007-firmware-capability-pack-architecture.md) | Firmware Capability Pack Architecture | Accepted |
+| [ADR-0008](ADR-0008-two-dimensional-provenance-state.md) | Two-Dimensional Provenance State | Accepted — supersedes part of ADR-0004 and ADR-0006 |
 
 Rules: an ADR is never edited to change its decision. It is superseded by a new ADR that
 references it.

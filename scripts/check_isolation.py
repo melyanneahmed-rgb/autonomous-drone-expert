@@ -115,6 +115,17 @@ def check_no_publication_workflow() -> None:
             )
 
 
+def path_escapes_repository(manifest_path: Path, dep_path: str, root: Path = ROOT) -> bool:
+    """Return True when a path dependency resolves outside the repository.
+
+    A string prefix comparison is not sufficient here: `/x/repo-malicious` starts with
+    `/x/repo`, so a sibling directory with a similar name would slip through. Path
+    containment is checked structurally instead.
+    """
+    resolved = (manifest_path.parent / dep_path).resolve()
+    return not resolved.is_relative_to(root.resolve())
+
+
 def _iter_dependency_tables(manifest: dict):
     for key in ("dependencies", "dev-dependencies", "build-dependencies"):
         if key in manifest:
@@ -144,13 +155,11 @@ def check_cargo_manifests(files: list[Path]) -> None:
                 if "git" in spec:
                     fail(f"{rel}: dependency '{name}' uses a git source. Prohibited.")
                 dep_path = spec.get("path")
-                if isinstance(dep_path, str):
-                    resolved = (path.parent / dep_path).resolve()
-                    if not str(resolved).startswith(str(ROOT)):
-                        fail(
-                            f"{rel}: dependency '{name}' has a path escaping the "
-                            f"repository ({dep_path})."
-                        )
+                if isinstance(dep_path, str) and path_escapes_repository(path, dep_path):
+                    fail(
+                        f"{rel}: dependency '{name}' has a path escaping the "
+                        f"repository ({dep_path})."
+                    )
         if "workspace" in manifest and "package" in manifest:
             continue
 

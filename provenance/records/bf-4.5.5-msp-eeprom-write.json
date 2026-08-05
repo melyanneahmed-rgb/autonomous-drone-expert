@@ -19,11 +19,12 @@
     "retrieved_by": "m0-foundation-batch"
   },
   "payload_layout": null,
-  "status": "UNVERIFIED",
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "NOT_REPRODUCED",
   "verification": {
     "method": "Reproduce against ade-mock-fc, then observe on a real board running Betaflight 4.5.5 once the hardware-write gate and bench unit exist.",
-    "mock_verified_at": null,
-    "hardware_verified_at": null
+    "mock_exercised_at": null,
+    "hardware_observed_at": null
   },
   "licensing": {
     "copied_material": false,

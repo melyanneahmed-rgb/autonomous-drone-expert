@@ -17,6 +17,7 @@ edition = "2024"
 rust-version = "1.85.0"
 publish = false
 
-[profile.release]
-debug = false
-panic = "abort"
+# No [profile.release] here on purpose. Release profile choices -- panic strategy, debug
+# information, optimisation level -- are real engineering decisions with consequences for
+# unwinding, recovery and diagnostics. They are deferred to a dedicated ADR taken when
+# there is something to release, not inherited from a template.

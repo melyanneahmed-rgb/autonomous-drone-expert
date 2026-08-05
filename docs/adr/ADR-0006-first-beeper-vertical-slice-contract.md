@@ -1,7 +1,8 @@
 # ADR-0006 — First Beeper Vertical Slice Contract
 
 - **Status:** Accepted — **documentation only**. Nothing in this ADR is implemented, and
-  implementation is **not approved** in the foundation batch.
+  implementation is **not approved** in the foundation batch. Record-state vocabulary and
+  the code-entry rule follow **ADR-0008**.
 - **Date:** 2026-08-05
 
 > **ملخص:** عقد شريحة M1 الرأسية الأولى: إعداد الجرس والتحقق منه على لوحة وإصدار محددين
@@ -21,7 +22,7 @@ motors and no propellers.
 | Board | SpeedyBee F405 V4 | `PROPOSED — NOT HARDWARE VALIDATED` |
 | Betaflight target | `SPEEDYBEEF405V4` | `PROPOSED — NOT HARDWARE VALIDATED` |
 | Firmware | Betaflight 4.5.5 | Pinned for the slice |
-| MSP API version | 1.46 | Recorded from tag `4.5.5`, status `UNVERIFIED` |
+| MSP API version | 1.46 | `PINNED_SOURCE_RECORDED` / `NOT_REPRODUCED` (tag `4.5.5`) |
 
 The board is proposed, not purchased, not connected and not validated. Nothing in this
 document may be read as a support claim.
@@ -29,8 +30,10 @@ document may be read as a support claim.
 ## Contract (future work — not implemented)
 
 1. Read `MSP_BEEPER_CONFIG`.
-2. Store the **full expected 9-byte payload** — only after its layout is proven under the
-   provenance policy. Until then the layout is `UNVERIFIED` and must not be assumed.
+2. Store the **full expected 9-byte payload** — only after its layout is documented from
+   tag `4.5.5` under the provenance policy. A layout documented at `NOT_REPRODUCED` is
+   usable for implementation work; it is not evidence about hardware and must not be
+   presented as such. Nothing about the layout may be assumed while it is undocumented.
 3. Change **`beeper_off_flags` only**. No other field is touched.
 4. Change **only the `SYSTEM_INIT` bit**, and only after its meaning and bit position are
    established from tag `4.5.5`. The direction of the mask (enable versus disable) is itself
@@ -83,6 +86,16 @@ are never opened at random without user selection or a trusted identifier match.
 
 ## Status of every command referenced here
 
-All command identifiers are recorded under `provenance/records/` with status `UNVERIFIED`.
-None may be placed in Rust code until its record reaches at least `MOCK_VERIFIED` and the
-implementation batch is approved.
+All command identifiers are recorded under `provenance/records/` as
+`PINNED_SOURCE_RECORDED` / `NOT_REPRODUCED`.
+
+Bringing any of them into Rust code is governed by four rules, not by a state threshold:
+
+1. No protocol fact enters the code without a **pinned source record**.
+2. Bringing it in requires an **approved implementation pull request**.
+3. That **same pull request** must add the mock tests appropriate to the fact.
+4. **Hardware support is never claimed below `HARDWARE_OBSERVED`.**
+
+The mock exercises our implementation and its internal consistency. It is built from the
+same records as the code, so it is never presented as independent proof that the official
+source is correct.

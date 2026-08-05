@@ -1,7 +1,7 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "title": "Provenance record",
-  "description": "Minimal self-contained schema for one protocol fact. Enforced by scripts/validate_provenance.py using only the Python standard library.",
+  "description": "Minimal self-contained schema for one protocol fact. Enforced by scripts/validate_provenance.py using only the Python standard library. Version 2 separates where a fact came from (source_state) from whether our implementation has exercised it (verification_state). Those are independent questions and collapsing them into one ladder made it impossible to record a documented fact before the code that would exercise it existed.",
   "type": "object",
   "required": [
     "record_id",
@@ -11,7 +11,8 @@
     "firmware",
     "source",
     "payload_layout",
-    "status",
+    "source_state",
+    "verification_state",
     "verification",
     "licensing"
   ],
@@ -57,16 +58,30 @@
     },
     "payload_layout": {
       "type": ["object", "null"],
-      "description": "Null until established under this policy. Never populated by assumption."
+      "description": "May be documented from a pinned source at any verification_state. Being documented is not being exercised: what the layout means operationally is carried by verification_state, never by the presence of this field.",
+      "properties": {
+        "fields": { "type": ["array", "null"] },
+        "length_bytes": { "type": ["integer", "null"] },
+        "note": { "type": ["string", "null"] }
+      }
     },
-    "status": { "type": "string", "enum": ["UNVERIFIED", "MOCK_VERIFIED", "HARDWARE_VERIFIED"] },
+    "source_state": {
+      "type": "string",
+      "enum": ["PINNED_SOURCE_RECORDED"],
+      "description": "Where the fact came from. PINNED_SOURCE_RECORDED means it was recorded from an official source tied to a fixed tag or commit, with no claim that it was ever exercised."
+    },
+    "verification_state": {
+      "type": "string",
+      "enum": ["NOT_REPRODUCED", "MOCK_EXERCISED", "HARDWARE_OBSERVED"],
+      "description": "What our implementation has done with the fact. MOCK_EXERCISED tests our own implementation and its internal consistency; it is not independent evidence that the official source is correct. Only HARDWARE_OBSERVED reflects real hardware."
+    },
     "verification": {
       "type": "object",
       "required": ["method"],
       "properties": {
         "method": { "type": "string" },
-        "mock_verified_at": { "type": ["string", "null"] },
-        "hardware_verified_at": { "type": ["string", "null"] }
+        "mock_exercised_at": { "type": ["string", "null"] },
+        "hardware_observed_at": { "type": ["string", "null"] }
       }
     },
     "licensing": {
@@ -85,8 +100,8 @@
   "invariants": [
     "source.ref must not be a moving branch",
     "licensing.copied_material must be false",
-    "payload_layout must be null unless status is HARDWARE_VERIFIED",
-    "status HARDWARE_VERIFIED requires verification.hardware_verified_at",
-    "status MOCK_VERIFIED requires verification.mock_verified_at"
+    "verification_state MOCK_EXERCISED requires verification.mock_exercised_at",
+    "verification_state HARDWARE_OBSERVED requires verification.hardware_observed_at",
+    "a payload_layout may be documented at any verification_state and never implies operational verification"
   ]
 }

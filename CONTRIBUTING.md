@@ -18,9 +18,15 @@ repository.
   comments, tests, fixtures, generated tables, error strings and internal structure must
   **never** be copied or mechanically translated into this repository.
 
-These rules are enforced by `scripts/check_isolation.py` in CI. The enforcement targets
-real coupling — imports, paths, submodules, remotes and copied files. Naming another
-project in prose or documentation is allowed and expected.
+`scripts/check_isolation.py` enforces part of this in CI, and it is important to be
+precise about which part. **CI blocks structural coupling**: external `git` and `path`
+dependencies, paths escaping the repository, submodules, unexpected remotes, and known
+vendored directory names. **CI does not detect copied or derived source.** There is no
+similarity check and no hash comparison. Detecting copying relies on the provenance policy
+below and on human review — so the discipline in section 2 is not optional, it is the
+actual control.
+
+Naming another project in prose or documentation is allowed and expected.
 
 ## 2. Source provenance (protocol layer)
 
@@ -29,14 +35,21 @@ condition — requires a record under `provenance/records/` **before** it may ap
 
 - The source must be a **pinned tag or commit**. A moving branch such as `master`, `main`
   or `HEAD` is rejected by CI.
-- A record starts at `UNVERIFIED`, becomes `MOCK_VERIFIED` when reproduced against the mock
-  flight controller, and only becomes `HARDWARE_VERIFIED` after observation on real
-  hardware.
-- Never mark a payload layout verified because it looks right. Verified means observed.
+- A record carries **two independent states**. `source_state` says where the fact came from
+  (`PINNED_SOURCE_RECORDED`). `verification_state` says what our code has done with it
+  (`NOT_REPRODUCED` → `MOCK_EXERCISED` → `HARDWARE_OBSERVED`). Never collapse them: a fact
+  can be perfectly documented and never exercised, and that is a normal, honest state.
+- The mock proves our implementation is internally consistent. It is **not** independent
+  evidence that the official source is correct — the mock is built from the same records.
+  Only `HARDWARE_OBSERVED` says anything about the real world.
+- A **payload layout may be documented at any verification state** if it comes from a
+  pinned source. Documenting is not exercising, and it must never be presented as more.
+- **Hardware support is never claimed below `HARDWARE_OBSERVED`.**
 
 Any pull request touching `crates/protocol-msp/` or `crates/protocol-cli/` is a
-**protocol change**: it requires matching provenance records and must not contain quoted
-upstream material.
+**protocol change**. Bringing a fact into code requires all of the following, in the same
+pull request: a pinned source record, approval of that implementation pull request, and the
+mock tests appropriate to the fact. No quoted upstream material, ever.
 
 ## 3. Safety and write authority
 

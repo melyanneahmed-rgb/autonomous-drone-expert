@@ -6,8 +6,13 @@ Enforces the source-provenance policy (ADR-0004, provenance/README.md):
   * every record matches provenance/schema.json,
   * every source is a pinned tag or commit -- never a moving branch,
   * no record admits copied material,
-  * a payload layout is never present unless the record is hardware verified,
+  * source state and verification state are recorded independently,
+  * a verification state above NOT_REPRODUCED carries the date that earned it,
   * every MSP constant appearing in Rust source has a matching record.
+
+A payload layout may be documented from a pinned source at any verification state.
+Documenting a layout is not exercising it: what has actually been done with a fact is
+carried by verification_state alone.
 
 Standard library only.
 """
@@ -81,7 +86,7 @@ def check_object(record_name: str, prefix: str, value: dict, spec: dict) -> None
 
 
 def check_invariants(record_name: str, rec: dict) -> None:
-    status = rec.get("status")
+    verification_state = rec.get("verification_state")
     verification = rec.get("verification") or {}
 
     if rec.get("licensing", {}).get("copied_material") is not False:
@@ -91,18 +96,22 @@ def check_invariants(record_name: str, rec: dict) -> None:
             "(ADR-0004).",
         )
 
-    if rec.get("payload_layout") is not None and status != "HARDWARE_VERIFIED":
+    # A payload layout may be documented from a pinned source at any verification state.
+    # There is deliberately no rule coupling its presence to verification: doing so made
+    # it impossible to document a layout before the code that would exercise it existed.
+
+    if verification_state == "HARDWARE_OBSERVED" and not verification.get(
+        "hardware_observed_at"
+    ):
         fail(
             record_name,
-            "payload_layout is populated but the record is not HARDWARE_VERIFIED. "
-            "A layout is never recorded by assumption.",
+            "HARDWARE_OBSERVED requires verification.hardware_observed_at",
         )
 
-    if status == "HARDWARE_VERIFIED" and not verification.get("hardware_verified_at"):
-        fail(record_name, "HARDWARE_VERIFIED requires verification.hardware_verified_at")
-
-    if status == "MOCK_VERIFIED" and not verification.get("mock_verified_at"):
-        fail(record_name, "MOCK_VERIFIED requires verification.mock_verified_at")
+    if verification_state == "MOCK_EXERCISED" and not verification.get(
+        "mock_exercised_at"
+    ):
+        fail(record_name, "MOCK_EXERCISED requires verification.mock_exercised_at")
 
     retrieved = rec.get("source", {}).get("retrieved_at")
     if isinstance(retrieved, str):
@@ -153,6 +162,7 @@ def main() -> int:
 
     seen_ids: set[str] = set()
     known_names: set[str] = set()
+    verification_states: set[str] = set()
 
     for path in records:
         name = path.relative_to(ROOT).as_posix()
@@ -173,6 +183,8 @@ def main() -> int:
             seen_ids.add(rid)
         if isinstance(rec.get("name"), str):
             known_names.add(rec["name"])
+        if isinstance(rec.get("verification_state"), str):
+            verification_states.add(rec["verification_state"])
 
     check_code_constants(known_names)
 
@@ -182,7 +194,11 @@ def main() -> int:
             print(f"  - {item}")
         return 1
 
-    print(f"provenance gate passed ({len(records)} records, all pinned)")
+    states = sorted({r for r in verification_states})
+    print(
+        f"provenance gate passed ({len(records)} records, all pinned; "
+        f"verification states: {', '.join(states)})"
+    )
     return 0
 
 

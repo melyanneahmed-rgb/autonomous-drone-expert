@@ -29,10 +29,14 @@ bypass.
 **استراتيجية الفروع:** trunk-based بفروع قصيرة: `feat/*`، `fix/*`، `chore/*`، `docs/*`،
 `spike/*` (لا تُدمج)، `provenance/*`. لا فروع طويلة العمر حتى M11.
 
-**منع الخلط والاستيراد العرضي (مصحح — البند 4 في الملحق):** الفحوص تمنع **الاقتران الفعلي**
-لا ذكر الأسماء: منع submodules، منع `git`/`path` dependencies خارج المستودع، منع remotes
-إضافية، كشف الملفات المنسوخة، منع مسارات بناء تشير إلى مستودعات أخرى. ذكر أسماء المشاريع في
-التوثيق **مسموح**.
+**منع الخلط والاستيراد العرضي (مصحح — البند 4 في الملحق، ثم دفعة التصحيح التأسيسية):**
+الفحوص تمنع **الاقتران البنيوي** لا ذكر الأسماء: منع submodules، منع `git`/`path`
+dependencies خارج المستودع (بفحص احتواء مسار حقيقي لا مقارنة نصية)، منع remotes إضافية،
+ومنع أسماء مجلدات vendored المعروفة. ذكر أسماء المشاريع في التوثيق **مسموح**.
+
+**تصحيح صريح:** CI **لا يكتشف** الملفات المنسوخة أو المشتقة — لا يوجد فحص تشابه ولا مقارنة
+بصمات. اكتشاف النسخ يعتمد على سياسة provenance والمراجعة البشرية، والادعاء بغير ذلك تطمين
+زائف.
 
 ## 2. Technology Decision Record
 
@@ -91,6 +95,11 @@ erase / write / verify / leave، وكل عملية تُصرّح Recovery Class �
 **قاعدة ملزمة:** كل مصدر يشير إلى **tag أو commit مثبّت** — لا فرع متحرك (`master`/`main`/
 `HEAD`). التفاصيل والقالب في `provenance/README.md`.
 
+**نموذج الحالة (ADR-0008):** لكل سجل بُعدان مستقلان — `source_state`
+(`PINNED_SOURCE_RECORDED`) و`verification_state` (`NOT_REPRODUCED` → `MOCK_EXERCISED` →
+`HARDWARE_OBSERVED`). الـ Mock يثبت اتساق تنفيذنا لا صحة المصدر الرسمي، ولا يُعلن دعم عتاد
+قبل `HARDWARE_OBSERVED`. تخطيط الحمولة يجوز توثيقه في أي حالة تحقق ما دام من مصدر مثبّت.
+
 **مراجعة طبقة البروتوكول:** كل PR يمس `crates/protocol-*` يحمل وسم `protocol-change`
 ويستلزم سجلات provenance مطابقة، وحالة معلنة بصدق، وgolden packets من إنتاجنا لا من
 fixtures المشاريع الرسمية.
@@ -126,10 +135,11 @@ fixtures المشاريع الرسمية.
 ## 9. CI and Quality Gates
 
 المفعّل الآن (بصدق، بلا اعتماديات): `cargo fmt --check` • `cargo clippy -D warnings` •
-`cargo test` • فحص `#![forbid(unsafe_code)]` في كل crate • منع `.gitmodules` • منع
-`git`/`path` dependencies خارجية • منع workflow نشر • منع ملف `LICENSE` • تحقق بنية سجلات
-provenance • فحص أن مصادر Betaflight تستخدم tag/commit مثبتًا لا `master` • فحص أنماط أسرار
-محلي • Windows CI • Linux CI.
+`cargo test` • **فحص MSRV مستقل** (`cargo +1.85.0 check`) يثبت الفصل بين سلسلة أدوات
+التطوير والـ MSRV المعلن • فحص `#![forbid(unsafe_code)]` في كل crate • منع `.gitmodules` •
+منع `git`/`path` dependencies خارجية • منع workflow نشر • منع ملف `LICENSE` • تحقق بنية
+سجلات provenance • فحص أن مصادر Betaflight تستخدم tag/commit مثبتًا لا `master` • فحص أنماط
+أسرار محلي • **اختبارات انحدار لسكربتات البوابات نفسها** • Windows CI • Linux CI.
 
 **مؤجل إلى دفعات لاحقة مع مكوناته:** Tauri build • React build • Vitest • Playwright •
 cargo-fuzz • property tests • Serial/USB/DFU tests • Beeper tests • hardware tests •

@@ -1,6 +1,7 @@
 # ADR-0004 — Source Provenance and Temporary Licensing
 
-- **Status:** Accepted
+- **Status:** Accepted. The record-state model in decision point 3 is **superseded by
+  ADR-0008**; everything else stands.
 - **Date:** 2026-08-05
 - **Note:** engineering risk-management posture, **not legal advice**.
 
@@ -22,8 +23,11 @@ project, and it is usually created by well-intentioned copy-paste during debuggi
 2. **Pinned sources only.** A record must cite a tag or commit. A moving branch (`master`,
    `main`, `HEAD`) is rejected by CI. This exists because upstream renames, renumbers and
    removes things between releases, and a fact without a version is not a fact.
-3. **Status ladder:** `UNVERIFIED` → `MOCK_VERIFIED` → `HARDWARE_VERIFIED`. A payload layout
-   is never marked verified because it looks correct.
+3. **Record states — superseded by ADR-0008.** This ADR originally defined a single status
+   ladder. It is replaced by two independent dimensions: `source_state` (where the fact came
+   from) and `verification_state` (`NOT_REPRODUCED` → `MOCK_EXERCISED` →
+   `HARDWARE_OBSERVED`, what our code has done with it). The underlying rule is unchanged:
+   nothing is described as verified because it looks correct.
 4. **No copying**, ever: code, comments, tests, fixtures, generated tables, error strings,
    internal module structure. Facts are described in our own words. Golden packets are
    produced by us, not taken from upstream fixtures.
@@ -34,6 +38,8 @@ project, and it is usually created by well-intentioned copy-paste during debuggi
    crates, MPL-2.0 files if modified, and any third-party asset.
 7. **Interim strategy that avoids the question entirely:** read capabilities from the board
    at runtime instead of shipping derived tables. This is the approved approach through M7.
+8. **The pipeline does not detect derivation.** CI blocks structural coupling only. This
+   policy and human review are the actual control against copying (ADR-0001).
 
 ## Decision — temporary licensing posture
 
