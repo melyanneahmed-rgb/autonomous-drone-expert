@@ -1,0 +1,34 @@
+{
+  "record_id": "bf-4.5.5-msp-build-info",
+  "kind": "command_id",
+  "name": "MSP_BUILD_INFO",
+  "value": 5,
+  "firmware": {
+    "family": "Betaflight",
+    "version": "4.5.5",
+    "msp_api_version": "1.46"
+  },
+  "source": {
+    "type": "upstream_firmware_source_read",
+    "repository": "betaflight/betaflight",
+    "ref_kind": "tag",
+    "ref": "4.5.5",
+    "path": "src/main/msp/msp_protocol.h",
+    "url": "https://raw.githubusercontent.com/betaflight/betaflight/4.5.5/src/main/msp/msp_protocol.h",
+    "retrieved_at": "2026-08-05",
+    "retrieved_by": "m0-foundation-batch"
+  },
+  "payload_layout": null,
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "NOT_REPRODUCED",
+  "verification": {
+    "method": "Reproduce against ade-mock-fc, then observe on a real board running Betaflight 4.5.5 once the hardware-write gate and bench unit exist.",
+    "mock_exercised_at": null,
+    "hardware_observed_at": null
+  },
+  "licensing": {
+    "copied_material": false,
+    "note": "Numeric interface constant read from a published pinned source and restated. No code, comments, tables, fixtures or error strings were copied."
+  },
+  "notes": "Build information. Relevant to cloud builds where a feature may be absent from the binary."
+}

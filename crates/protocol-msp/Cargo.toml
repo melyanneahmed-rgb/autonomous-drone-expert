@@ -1,0 +1,10 @@
+[package]
+name = "ade-protocol-msp"
+description = "MSP codec: v1, v2, v2-over-v1, jumbo frames and checksums. Every constant must carry a provenance record."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

@@ -1,0 +1,45 @@
+# Initial cargo-deny policy.
+#
+# STATUS: policy skeleton only. This file is NOT yet enforced in CI, because this batch
+# contains zero dependencies and cargo-deny is not yet installed as a reviewed tool.
+# The dependency audit is NOT complete and must not be described as complete until:
+#   1. a real dependency list exists,
+#   2. cargo-deny is pinned and enabled as a required CI check,
+#   3. every allowed license below has been consciously reviewed.
+# See docs/m0/foundations-gate.md section 3 and docs/adr/ADR-0004.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+unmaintained = "all"
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+# Deliberately conservative starting allowlist. Any addition is a reviewed decision,
+# recorded in an ADR, not a silent edit.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+]
+# Notable licenses intentionally NOT pre-approved and requiring explicit review:
+#   MPL-2.0  - file-level copyleft (relevant to serial-port candidates)
+#   GPL-*/AGPL-* - never linked into this project
+#   Unlicense/CC0 - reviewed case by case
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

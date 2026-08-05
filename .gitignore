@@ -10,6 +10,10 @@ dist/
 build/
 *.tsbuildinfo
 
+# Python bytecode from the policy-gate scripts
+__pycache__/
+*.py[cod]
+
 # Local environment
 .env
 .env.*

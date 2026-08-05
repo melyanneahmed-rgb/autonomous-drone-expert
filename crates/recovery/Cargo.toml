@@ -1,0 +1,10 @@
+[package]
+name = "ade-recovery"
+description = "Recovery manager implementing the five recovery classes and the state-unknown declaration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

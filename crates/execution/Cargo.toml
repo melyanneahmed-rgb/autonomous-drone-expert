@@ -1,0 +1,10 @@
+[package]
+name = "ade-execution"
+description = "Transactional change executor, batching, checkpoints, post-apply verification and audit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

@@ -1,0 +1,6 @@
+# Structural pnpm workspace.
+#
+# No package.json, no runtime dependencies, no React, no Vite, no Tauri tooling in this
+# batch. The UI package is created only when the UI batch is approved.
+packages:
+  - "ui"

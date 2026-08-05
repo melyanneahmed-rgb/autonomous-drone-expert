@@ -1,0 +1,10 @@
+[package]
+name = "ade-mock-fc"
+description = "Mock flight controller simulating firmware versions, boards and fault conditions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

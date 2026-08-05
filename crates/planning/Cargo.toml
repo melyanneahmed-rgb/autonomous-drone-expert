@@ -1,0 +1,10 @@
+[package]
+name = "ade-planning"
+description = "Change plan generation, dependency ordering, simulation and recovery-class declaration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]
