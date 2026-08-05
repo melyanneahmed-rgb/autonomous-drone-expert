@@ -1,0 +1,103 @@
+# CI for the M1C Android USB serial hardware harness (SPIKE).
+#
+# Runs ONLY for the Android spike branch and its own paths. Adds no requirement to
+# `main`, publishes no release, and must never be made a required check.
+#
+# Action pinning follows the repo convention: exact release tags (commit-SHA pinning
+# could not be completed because the third-party-repo GitHub API is unreachable from the
+# authoring sandbox; converting tags to SHAs is a tracked follow-up).
+
+name: Spike - Android USB Harness
+
+on:
+  push:
+    branches:
+      - spike/android-usb-serial-harness
+    paths:
+      - "spikes/android-usb-serial-harness/**"
+      - ".github/workflows/spike-android-usb-harness.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-android-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: spikes/android-usb-serial-harness
+
+jobs:
+  android-policy-gates:
+    name: android-policy-gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+      - name: Payload-write guard selftest
+        run: bash scripts/guard_no_payload_writes.sh selftest app/src/main
+      - name: Payload-write guard check
+        run: bash scripts/guard_no_payload_writes.sh check app/src/main
+      - name: Android policy gate (permissions, exports, raw-byte rendering)
+        run: python3 scripts/check_android_policy.py
+      - name: Repository isolation gate
+        working-directory: .
+        run: python3 scripts/check_isolation.py
+
+  android-unit-tests:
+    name: android-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
+  android-lint:
+    name: android-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+      - name: Lint (debug)
+        run: ./gradlew :app:lintDebug --no-daemon --stacktrace
+
+  android-assemble-debug:
+    name: android-assemble-debug
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug -PsourceSha=${{ github.sha }} --no-daemon --stacktrace
