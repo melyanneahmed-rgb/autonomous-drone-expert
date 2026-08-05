@@ -1,0 +1,159 @@
+# CI for the M1A serial-transport spike.
+#
+# Runs ONLY on the spike branch. It adds no requirement to `main`, publishes no artefact,
+# and must never be made a required check.
+#
+# Action pinning follows the repository convention: exact release tags. Converting tags
+# to commit SHAs is a tracked follow-up (see PR #1 review notes).
+
+name: Spike — Windows Serial Transport
+
+on:
+  push:
+    branches:
+      - spike/windows-serial-transport
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: spikes/windows-serial-transport
+
+concurrency:
+  group: spike-serial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike-windows:
+    name: spike-windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --all-targets
+
+      # Output is captured deliberately: every assertion prints its evidence label
+      # (CI_VERIFIED / SIMULATED_ONLY / REQUIRES_WINDOWS_HARDWARE_TEST) so the report can
+      # cite what the runner actually proved rather than what we hoped it would.
+      - name: Tests with evidence labels
+        run: cargo test -- --nocapture --test-threads=1
+
+  spike-linux:
+    name: spike-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # FINDING: serialport's default features pull libudev-sys, whose build script fails
+      # on a machine without libudev development files. The spike disables default
+      # features; this step proves the abstraction still compiles and runs on Linux.
+      - name: Build and test the abstraction on Linux
+        run: |
+          cargo build --all-targets
+          cargo test -- --nocapture --test-threads=1
+
+  spike-audit:
+    name: spike-audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # Pinned exactly to the versions that produced the recorded audit results
+      # (cargo-deny 0.20.2, cargo-audit 0.22.2, verified locally on 2026-08-05).
+      # Unpinned installs would let the gate drift from the report.
+      - name: Install audit tooling (pinned)
+        run: cargo install --locked cargo-deny@0.20.2 cargo-audit@0.22.2
+
+      # No --all-features: enabling serialport's default "libudev" feature makes the
+      # dependency graph require system libudev, which is exactly the build failure this
+      # spike documented. The spike pins default-features = false deliberately.
+      - name: cargo-deny (spike policy)
+        run: cargo deny check
+
+      - name: cargo-audit
+        run: cargo audit
+
+  spike-package-windows:
+    # Builds m1b.exe for the operator so that M1B needs no local Git, Rust or build.
+    # Runs ONLY after the full Windows quality job (fmt, clippy, build, tests) has
+    # passed. The result is a PRIVATE GitHub Actions artifact on this private
+    # repository -- not a release, not public -- with the shortest retention GitHub
+    # allows (1 day). Spike tooling only; never merged to main.
+    name: spike-package-windows
+    runs-on: windows-latest
+    needs: spike-windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+
+      # The guard matches CALL SYNTAX only (.name followed by an opening parenthesis,
+      # after stripping // comments). The previous revision matched bare words and
+      # rejected its own safety-banner text inside a string literal; that regression is
+      # now selftest case 3, which runs here on every packaging build.
+      - name: Guard - no payload-write calls in the m1b binary source
+        shell: bash
+        run: |
+          bash scripts/guard_no_payload_writes.sh selftest src/bin/m1b.rs
+          bash scripts/guard_no_payload_writes.sh check src/bin/m1b.rs
+
+      - name: Build m1b.exe (release)
+        run: cargo build --release --bin m1b
+
+      - name: Assemble artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/m1b.exe dist/
+          RUSTV="$(rustc --version)"
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cat > dist/BUILD-INFO.txt <<INFO
+          Repository        : ${GITHUB_REPOSITORY}
+          Source branch     : ${GITHUB_REF_NAME}
+          Source commit SHA : ${GITHUB_SHA}
+          Rust version      : ${RUSTV}
+          Build timestamp   : ${STAMP}
+
+          This binary contains NO payload-byte write paths: it enumerates serial
+          ports, opens a port (applying baud/timeout), reads, and closes. It performs
+          no write/write_all/flush/purge/discard, no MSP, no CLI, and calls no
+          DTR/RTS setter. Opening a serial port is still not assumed to be
+          side-effect-free; follow docs/M1B-HARDWARE-PROTOCOL.md.
+
+          Spike tooling for milestone M1B. NOT production software. This branch is
+          never merged into main.
+          INFO
+          cd dist
+          echo "=== BUILD-INFO.txt ==="
+          cat BUILD-INFO.txt
+          sha256sum m1b.exe BUILD-INFO.txt > SHA256SUMS.txt
+          echo "=== SHA256SUMS.txt ==="
+          cat SHA256SUMS.txt
+
+      - name: Upload private artifact (1-day retention)
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: m1b-windows-${{ github.sha }}
+          path: spikes/windows-serial-transport/dist/
+          retention-days: 1
+          if-no-files-found: error

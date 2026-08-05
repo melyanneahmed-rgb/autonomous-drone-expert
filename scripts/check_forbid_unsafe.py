@@ -7,17 +7,54 @@ transport crate. Relaxing this is a dedicated pull request with written justific
 owner review -- never a quiet edit.
 
 Standard library only.
+
+SPIKE-BRANCH EXPERIMENT -- comment stripping is REJECTED FOR PRODUCTION
+-----------------------------------------------------------------------
+On this branch only, the token scan strips comments first so that prose *about* unsafe
+(doc comments, design notes) does not fail the gate. That stripping is regex-based and is
+NOT reliable protection: a `//` inside a string literal is treated as a comment start,
+which deletes the remainder of that line and can hide a real `unsafe` token appearing
+later on it. Example the regex gets wrong:
+
+    let s = "https://x"; unsafe { f() }   // remainder after "//" vanishes from the scan
+
+Because of that failure mode, this modification must NOT be promoted to `main` as the
+production gate. The reliable layers remain: (1) the mandatory `#![forbid(unsafe_code)]`
+declaration in every crate, which makes the *compiler* reject unsafe code regardless of
+what this script sees, and (2) human review. Any future production improvement to this
+scanner needs a proper tokenizer/parser, or compiler-level enforcement alone, in its own
+reviewed pull request.
 """
 
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
 DECLARATION = "#![forbid(unsafe_code)]"
+
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
+def strip_comments(source: str) -> str:
+    """Remove Rust comments so the gate scans code, not prose. EXPERIMENTAL.
+
+    Without this, any file that merely *discusses* unsafe code -- a doc comment, a design
+    note, a module header -- fails the gate, which teaches people to avoid writing about
+    the rule.
+
+    This implementation is regex-based and therefore NOT reliable: a `//` inside a string
+    literal is treated as a comment start and hides the rest of that line from the scan,
+    including any real `unsafe` token after it. That is a genuine missed-detection path.
+    It is tolerated on the spike branch only because the compiler-enforced
+    `#![forbid(unsafe_code)]` declaration -- which this script independently verifies is
+    present in every crate -- rejects unsafe code regardless of this scan. REJECTED FOR
+    PRODUCTION; see the module docstring.
+    """
+    return _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", source))
 
 errors: list[str] = []
 
@@ -41,7 +78,7 @@ for rs in sorted(ROOT.rglob("*.rs")):
     if ".git" in rs.parts or "target" in rs.parts:
         continue
     text = rs.read_text(encoding="utf-8")
-    stripped = text.replace("forbid(unsafe_code)", "")
+    stripped = strip_comments(text).replace("forbid(unsafe_code)", "")
     if re.search(r"\bunsafe\b", stripped):
         errors.append(
             f"{rs.relative_to(ROOT)}: contains an 'unsafe' token. Not permitted in this "
