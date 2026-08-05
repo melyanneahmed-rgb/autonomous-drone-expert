@@ -12,12 +12,31 @@ Standard library only.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
 DECLARATION = "#![forbid(unsafe_code)]"
+
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
+def strip_comments(source: str) -> str:
+    """Remove Rust comments so the gate scans code, not prose.
+
+    Without this, any file that merely *discusses* unsafe code -- a doc comment, a design
+    note, this project's own architecture documentation inside a module header -- fails
+    the gate. That is a false positive that teaches people to avoid writing about the
+    rule, which is the opposite of what the rule is for.
+
+    The stripping is intentionally simple and errs toward removing too much: a `//`
+    sequence inside a string literal will be treated as a comment. That direction is
+    safe for this gate, because removing more text can only cause a missed detection in
+    a construction that does not occur in this codebase, and the declaration check plus
+    review cover the remainder.
+    """
+    return _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", source))
 
 errors: list[str] = []
 
@@ -41,7 +60,7 @@ for rs in sorted(ROOT.rglob("*.rs")):
     if ".git" in rs.parts or "target" in rs.parts:
         continue
     text = rs.read_text(encoding="utf-8")
-    stripped = text.replace("forbid(unsafe_code)", "")
+    stripped = strip_comments(text).replace("forbid(unsafe_code)", "")
     if re.search(r"\bunsafe\b", stripped):
         errors.append(
             f"{rs.relative_to(ROOT)}: contains an 'unsafe' token. Not permitted in this "

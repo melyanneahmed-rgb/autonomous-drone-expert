@@ -24,6 +24,18 @@ ROOT = Path(__file__).resolve().parent.parent
 # required check. Flipping this flag without that pull request is a policy violation.
 FOUNDATION_NO_DEPENDENCIES = True
 
+# Quarantined areas may carry audited, temporary dependencies that must never reach a
+# production crate or `main`. A spike is an experiment whose whole purpose is to try
+# candidate libraries; forbidding it dependencies would make the evaluation impossible.
+#
+# Quarantine is narrow and explicit:
+#   * the zero-dependency rule does not apply inside these prefixes,
+#   * every other rule still does -- no git sources, no paths escaping the repository,
+#     no submodules, no vendored copies,
+#   * a quarantined package must declare its own [workspace] so the production build
+#     never resolves its dependencies, which is verified below.
+QUARANTINED_PREFIXES = ("spikes/",)
+
 ALLOWED_REMOTES = {"origin"}
 
 LICENSE_FILENAMES = {
@@ -141,9 +153,18 @@ def check_cargo_manifests(files: list[Path]) -> None:
         if path.name != "Cargo.toml":
             continue
         rel = path.relative_to(ROOT)
+        rel_posix = rel.as_posix()
+        quarantined = rel_posix.startswith(QUARANTINED_PREFIXES)
         manifest = tomllib.loads(path.read_text(encoding="utf-8"))
+
+        if quarantined and "workspace" not in manifest:
+            fail(
+                f"{rel} is quarantined but does not declare its own [workspace]. Without "
+                "that, its dependencies would be resolved by the production build."
+            )
+
         for table_name, table in _iter_dependency_tables(manifest):
-            if FOUNDATION_NO_DEPENDENCIES and table:
+            if FOUNDATION_NO_DEPENDENCIES and table and not quarantined:
                 fail(
                     f"{rel} declares dependencies in [{table_name}]: "
                     f"{sorted(table)}. The foundation batch is approved with zero "
@@ -195,7 +216,15 @@ def main() -> int:
         for item in errors:
             print(f"  - {item}")
         return 1
-    print(f"isolation gate passed ({len(files)} tracked files inspected)")
+    quarantined = [
+        f.relative_to(ROOT).as_posix()
+        for f in files
+        if f.relative_to(ROOT).as_posix().startswith(QUARANTINED_PREFIXES)
+    ]
+    print(
+        f"isolation gate passed ({len(files)} tracked files inspected; "
+        f"{len(quarantined)} in quarantine)"
+    )
     return 0
 
 

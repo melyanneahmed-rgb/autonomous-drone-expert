@@ -1,5 +1,7 @@
 # Rust
 /target/
+# Nested workspaces (spikes) build here too
+**/target/
 **/*.rs.bk
 *.pdb
 

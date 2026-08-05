@@ -1,0 +1,23 @@
+# Isolated spike workspace. Declaring [workspace] here keeps this package OUT of the
+# production workspace at the repository root: its dependencies never enter production
+# crates, never reach main, and are never resolved by the production build.
+[workspace]
+
+[package]
+name = "spike-windows-serial-transport"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85.0"
+publish = false
+description = "M1A spike: comparative evaluation of Rust serial-port layers on Windows. Not production code."
+
+[dependencies]
+# default-features = false disables the "libudev" feature.
+#
+# FINDING (M1A): with default features, serialport 4.9.0 pulls libudev-sys, whose build
+# script hard-fails on any Linux machine or container without libudev development files:
+#   "The system library `libudev` required by crate `libudev-sys` was not found."
+# Windows builds are unaffected. The cost of disabling it is reduced enumeration metadata
+# on Linux; on Windows the metadata path is unchanged. Recorded in docs/REPORT.md.
+serialport = { version = "=4.9.0", default-features = false }
+serial2 = "=0.2.38"

@@ -1,0 +1,87 @@
+# CI for the M1A serial-transport spike.
+#
+# Runs ONLY on the spike branch. It adds no requirement to `main`, publishes no artefact,
+# and must never be made a required check.
+#
+# Action pinning follows the repository convention: exact release tags. Converting tags
+# to commit SHAs is a tracked follow-up (see PR #1 review notes).
+
+name: Spike — Windows Serial Transport
+
+on:
+  push:
+    branches:
+      - spike/windows-serial-transport
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: spikes/windows-serial-transport
+
+concurrency:
+  group: spike-serial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike-windows:
+    name: spike-windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --all-targets
+
+      # Output is captured deliberately: every assertion prints its evidence label
+      # (CI_VERIFIED / SIMULATED_ONLY / REQUIRES_WINDOWS_HARDWARE_TEST) so the report can
+      # cite what the runner actually proved rather than what we hoped it would.
+      - name: Tests with evidence labels
+        run: cargo test -- --nocapture --test-threads=1
+
+  spike-linux:
+    name: spike-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # FINDING: serialport's default features pull libudev-sys, whose build script fails
+      # on a machine without libudev development files. The spike disables default
+      # features; this step proves the abstraction still compiles and runs on Linux.
+      - name: Build and test the abstraction on Linux
+        run: |
+          cargo build --all-targets
+          cargo test -- --nocapture --test-threads=1
+
+  spike-audit:
+    name: spike-audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install audit tooling
+        run: cargo install --locked cargo-deny cargo-audit
+
+      # No --all-features: enabling serialport's default "libudev" feature makes the
+      # dependency graph require system libudev, which is exactly the build failure this
+      # spike documented. The spike pins default-features = false deliberately.
+      - name: cargo-deny (spike policy)
+        run: cargo deny check
+
+      - name: cargo-audit
+        run: cargo audit

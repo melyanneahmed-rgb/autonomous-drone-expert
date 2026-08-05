@@ -1,0 +1,46 @@
+# cargo-deny policy for the SPIKE ONLY.
+#
+# This is deliberately separate from the repository-root deny.toml. The spike is a
+# quarantined experiment and is allowed to carry licences that the production policy has
+# not accepted — most importantly MPL-2.0, which serialport uses. Nothing here grants
+# anything to production: the production allowlist is unchanged, and adopting any of
+# these crates requires its own reviewed pull request.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+unmaintained = "all"
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    # Spike-only: file-level copyleft, evaluated in docs/DEPENDENCY-AUDIT.md.
+    "MPL-2.0",
+]
+
+# Our own package is deliberately unlicensed: the project licence is still deferred and
+# NOTICE.md states that no rights are granted. cargo-deny would otherwise fail the check
+# on our own crate. This ignores workspace members marked `publish = false` only -- it
+# does not relax anything for third-party code.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
