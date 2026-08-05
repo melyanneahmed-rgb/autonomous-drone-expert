@@ -107,17 +107,15 @@ jobs:
           rustup show active-toolchain
           rustc --version
 
+      # The guard matches CALL SYNTAX only (.name followed by an opening parenthesis,
+      # after stripping // comments). The previous revision matched bare words and
+      # rejected its own safety-banner text inside a string literal; that regression is
+      # now selftest case 3, which runs here on every packaging build.
       - name: Guard - no payload-write calls in the m1b binary source
         shell: bash
         run: |
-          # Fail packaging if any non-comment line of the runner calls a write/flush/
-          # purge path. Comment lines (the docs that *describe* the guarantee) are
-          # stripped first.
-          if sed 's|//.*||' src/bin/m1b.rs | grep -nE "write_some|write_all|\.flush\(|discard|purge|set_dtr|set_rts|write_data_terminal_ready|write_request_to_send"; then
-            echo "payload-write or control-line call found in m1b.rs -- refusing to package"
-            exit 1
-          fi
-          echo "guard passed: no payload-write and no DTR/RTS calls outside comments"
+          bash scripts/guard_no_payload_writes.sh selftest src/bin/m1b.rs
+          bash scripts/guard_no_payload_writes.sh check src/bin/m1b.rs
 
       - name: Build m1b.exe (release)
         run: cargo build --release --bin m1b
@@ -146,6 +144,8 @@ jobs:
           never merged into main.
           INFO
           cd dist
+          echo "=== BUILD-INFO.txt ==="
+          cat BUILD-INFO.txt
           sha256sum m1b.exe BUILD-INFO.txt > SHA256SUMS.txt
           echo "=== SHA256SUMS.txt ==="
           cat SHA256SUMS.txt
