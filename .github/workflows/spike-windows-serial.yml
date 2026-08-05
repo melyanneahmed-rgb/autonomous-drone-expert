@@ -88,3 +88,72 @@ jobs:
 
       - name: cargo-audit
         run: cargo audit
+
+  spike-package-windows:
+    # Builds m1b.exe for the operator so that M1B needs no local Git, Rust or build.
+    # Runs ONLY after the full Windows quality job (fmt, clippy, build, tests) has
+    # passed. The result is a PRIVATE GitHub Actions artifact on this private
+    # repository -- not a release, not public -- with the shortest retention GitHub
+    # allows (1 day). Spike tooling only; never merged to main.
+    name: spike-package-windows
+    runs-on: windows-latest
+    needs: spike-windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Guard - no payload-write calls in the m1b binary source
+        shell: bash
+        run: |
+          # Fail packaging if any non-comment line of the runner calls a write/flush/
+          # purge path. Comment lines (the docs that *describe* the guarantee) are
+          # stripped first.
+          if sed 's|//.*||' src/bin/m1b.rs | grep -nE "write_some|write_all|\.flush\(|discard|purge|set_dtr|set_rts|write_data_terminal_ready|write_request_to_send"; then
+            echo "payload-write or control-line call found in m1b.rs -- refusing to package"
+            exit 1
+          fi
+          echo "guard passed: no payload-write and no DTR/RTS calls outside comments"
+
+      - name: Build m1b.exe (release)
+        run: cargo build --release --bin m1b
+
+      - name: Assemble artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/m1b.exe dist/
+          RUSTV="$(rustc --version)"
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cat > dist/BUILD-INFO.txt <<INFO
+          Repository        : ${GITHUB_REPOSITORY}
+          Source branch     : ${GITHUB_REF_NAME}
+          Source commit SHA : ${GITHUB_SHA}
+          Rust version      : ${RUSTV}
+          Build timestamp   : ${STAMP}
+
+          This binary contains NO payload-byte write paths: it enumerates serial
+          ports, opens a port (applying baud/timeout), reads, and closes. It performs
+          no write/write_all/flush/purge/discard, no MSP, no CLI, and calls no
+          DTR/RTS setter. Opening a serial port is still not assumed to be
+          side-effect-free; follow docs/M1B-HARDWARE-PROTOCOL.md.
+
+          Spike tooling for milestone M1B. NOT production software. This branch is
+          never merged into main.
+          INFO
+          cd dist
+          sha256sum m1b.exe BUILD-INFO.txt > SHA256SUMS.txt
+          echo "=== SHA256SUMS.txt ==="
+          cat SHA256SUMS.txt
+
+      - name: Upload private artifact (1-day retention)
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: m1b-windows-${{ github.sha }}
+          path: spikes/windows-serial-transport/dist/
+          retention-days: 1
+          if-no-files-found: error
