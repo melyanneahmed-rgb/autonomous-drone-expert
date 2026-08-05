@@ -73,4 +73,13 @@ impl SerialportBackend {
     pub fn configured_timeout(&self) -> Duration {
         self.inner.timeout()
     }
+
+    /// Duplicate the OS handle. Used by the M1B drop-cancel probe: a clone reads while
+    /// the original is dropped, which is the only cancellation architecture expressible
+    /// in safe Rust against this API.
+    pub fn try_clone_handle(&self) -> Result<Box<dyn serialport::SerialPort>, TransportError> {
+        self.inner
+            .try_clone()
+            .map_err(|e| crate::error::classify_serialport_error(&e, Op::Open))
+    }
 }
