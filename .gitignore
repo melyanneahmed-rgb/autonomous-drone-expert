@@ -1,0 +1,38 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Node / pnpm (structural workspace only; no runtime dependencies yet)
+node_modules/
+.pnpm-store/
+dist/
+build/
+*.tsbuildinfo
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local scratch and reports (never committed)
+/tmp/
+/scratch/
+*.log
+
+# Never commit device captures, backups or case records produced locally
+/local-cases/
+/local-backups/
+*.msplog
