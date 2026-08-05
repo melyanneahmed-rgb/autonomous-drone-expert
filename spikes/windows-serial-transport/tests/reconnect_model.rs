@@ -1,8 +1,8 @@
 //! Disconnect and reconnect matching — the logic is CI_VERIFIED, the device behaviour is
 //! REQUIRES_WINDOWS_HARDWARE_TEST.
 
-use spike_windows_serial_transport::reconnect::{compare, diff, MatchConfidence};
 use spike_windows_serial_transport::PortInfo;
+use spike_windows_serial_transport::reconnect::{MatchConfidence, compare, diff};
 
 fn board(name: &str, serial: Option<&str>) -> PortInfo {
     PortInfo {
@@ -58,7 +58,10 @@ fn a_replug_under_a_new_name_reads_as_a_rename_not_a_loss() {
     let before = vec![board("COM3", Some("ABC123")), PortInfo::named("COM1")];
     let after = vec![board("COM7", Some("ABC123")), PortInfo::named("COM1")];
     let delta = diff(&before, &after);
-    assert_eq!(delta.renamed, vec![("COM3".to_string(), "COM7".to_string())]);
+    assert_eq!(
+        delta.renamed,
+        vec![("COM3".to_string(), "COM7".to_string())]
+    );
     assert!(delta.appeared.is_empty() && delta.disappeared.is_empty());
     println!("[CI_VERIFIED] replug on a new COM number reported as a rename");
 }

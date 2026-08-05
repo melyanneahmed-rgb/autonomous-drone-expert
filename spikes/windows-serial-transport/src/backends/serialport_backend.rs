@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::contract::{MetadataSupport, OpenConfig, PortInfo, SpikeTransport};
-use crate::error::{classify_serialport_error, classify_io_error, Op, TransportError};
+use crate::error::{Op, TransportError, classify_io_error, classify_serialport_error};
 
 pub struct SerialportBackend {
     inner: Box<dyn serialport::SerialPort>,
@@ -48,13 +48,11 @@ impl SpikeTransport for SerialportBackend {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        std::io::Read::read(&mut self.inner, buf)
-            .map_err(|e| classify_io_error(&e, Op::Read))
+        std::io::Read::read(&mut self.inner, buf).map_err(|e| classify_io_error(&e, Op::Read))
     }
 
     fn write(&mut self, buf: &[u8]) -> Result<usize, TransportError> {
-        std::io::Write::write(&mut self.inner, buf)
-            .map_err(|e| classify_io_error(&e, Op::Write))
+        std::io::Write::write(&mut self.inner, buf).map_err(|e| classify_io_error(&e, Op::Write))
     }
 
     fn flush(&mut self) -> Result<(), TransportError> {

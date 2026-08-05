@@ -24,7 +24,10 @@ pub struct PortInfo {
 
 impl PortInfo {
     pub fn named(name: impl Into<String>) -> Self {
-        Self { port_name: name.into(), ..Default::default() }
+        Self {
+            port_name: name.into(),
+            ..Default::default()
+        }
     }
 
     /// True when the entry carries nothing beyond a name. Used to measure how much each

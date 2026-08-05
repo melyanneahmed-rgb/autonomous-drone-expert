@@ -3,7 +3,7 @@
 use serial2::SerialPort;
 
 use crate::contract::{MetadataSupport, OpenConfig, PortInfo, SpikeTransport};
-use crate::error::{classify_io_error, Op, TransportError};
+use crate::error::{Op, TransportError, classify_io_error};
 
 pub struct Serial2Backend {
     inner: SerialPort,
@@ -20,8 +20,8 @@ impl SpikeTransport for Serial2Backend {
     }
 
     fn enumerate() -> Result<Vec<PortInfo>, TransportError> {
-        let ports = SerialPort::available_ports()
-            .map_err(|e| classify_io_error(&e, Op::Enumerate))?;
+        let ports =
+            SerialPort::available_ports().map_err(|e| classify_io_error(&e, Op::Enumerate))?;
         Ok(ports
             .into_iter()
             .map(|p| PortInfo::named(p.to_string_lossy().into_owned()))
@@ -41,15 +41,21 @@ impl SpikeTransport for Serial2Backend {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        self.inner.read(buf).map_err(|e| classify_io_error(&e, Op::Read))
+        self.inner
+            .read(buf)
+            .map_err(|e| classify_io_error(&e, Op::Read))
     }
 
     fn write(&mut self, buf: &[u8]) -> Result<usize, TransportError> {
-        self.inner.write(buf).map_err(|e| classify_io_error(&e, Op::Write))
+        self.inner
+            .write(buf)
+            .map_err(|e| classify_io_error(&e, Op::Write))
     }
 
     fn flush(&mut self) -> Result<(), TransportError> {
-        self.inner.flush().map_err(|e| classify_io_error(&e, Op::Flush))
+        self.inner
+            .flush()
+            .map_err(|e| classify_io_error(&e, Op::Flush))
     }
 
     fn close(self) -> Result<(), TransportError> {
@@ -62,6 +68,8 @@ impl Serial2Backend {
     /// `serial2` takes `&self` for read and write, so a clone can be handed to another
     /// thread. This is the primitive a cancellation design would be built on.
     pub fn try_clone_handle(&self) -> Result<SerialPort, TransportError> {
-        self.inner.try_clone().map_err(|e| classify_io_error(&e, Op::Open))
+        self.inner
+            .try_clone()
+            .map_err(|e| classify_io_error(&e, Op::Open))
     }
 }

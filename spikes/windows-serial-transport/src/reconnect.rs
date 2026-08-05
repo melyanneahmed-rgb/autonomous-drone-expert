@@ -40,8 +40,7 @@ pub fn compare(previous: &PortInfo, current: &PortInfo) -> MatchConfidence {
             return MatchConfidence::None;
         }
         let descriptor_match = (previous.product.is_some() && previous.product == current.product)
-            || (previous.manufacturer.is_some()
-                && previous.manufacturer == current.manufacturer);
+            || (previous.manufacturer.is_some() && previous.manufacturer == current.manufacturer);
         if descriptor_match {
             return MatchConfidence::VidPidAndDescriptor;
         }

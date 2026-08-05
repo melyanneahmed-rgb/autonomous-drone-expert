@@ -144,9 +144,7 @@ pub fn classify_serialport_error(err: &serialport::Error, op: Op) -> TransportEr
     match err.kind() {
         serialport::ErrorKind::NoDevice => TransportError::PortNotFound,
         serialport::ErrorKind::InvalidInput => TransportError::UnsupportedConfiguration,
-        serialport::ErrorKind::Io(kind) => {
-            classify_io_error(&io::Error::from(kind), op)
-        }
+        serialport::ErrorKind::Io(kind) => classify_io_error(&io::Error::from(kind), op),
         serialport::ErrorKind::Unknown => match op {
             Op::Open => TransportError::OpenFailed,
             Op::Read => TransportError::ReadFailed,

@@ -14,7 +14,7 @@ use std::time::Duration;
 use spike_windows_serial_transport::backends::serial2_backend::Serial2Backend;
 use spike_windows_serial_transport::backends::serialport_backend::SerialportBackend;
 use spike_windows_serial_transport::probes;
-use spike_windows_serial_transport::watchdog::{with_deadline, Outcome};
+use spike_windows_serial_transport::watchdog::{Outcome, with_deadline};
 use spike_windows_serial_transport::{MetadataSupport, OpenConfig, SpikeTransport, TransportError};
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -48,7 +48,12 @@ fn enumerate_case<T: SpikeTransport + Send + 'static>() {
                     "CI_VERIFIED",
                     &format!(
                         "{} vid={:?} pid={:?} mfr={:?} product={:?} serial={:?} bare={}",
-                        p.port_name, p.vid, p.pid, p.manufacturer, p.product, p.serial_number,
+                        p.port_name,
+                        p.vid,
+                        p.pid,
+                        p.manufacturer,
+                        p.product,
+                        p.serial_number,
                         p.is_bare()
                     ),
                 );
@@ -64,7 +69,12 @@ fn enumerate_case<T: SpikeTransport + Send + 'static>() {
         }
         Err(e) => {
             // An enumeration error is acceptable only if it is classified, never a panic.
-            report(name, "enumerate", "CI_VERIFIED", &format!("classified error: {e}"));
+            report(
+                name,
+                "enumerate",
+                "CI_VERIFIED",
+                &format!("classified error: {e}"),
+            );
         }
     }
 }
@@ -85,7 +95,12 @@ fn enumeration_is_repeatable_and_bounded() {
         assert!(with_deadline(DEADLINE, SerialportBackend::enumerate).completed());
         assert!(with_deadline(DEADLINE, Serial2Backend::enumerate).completed());
     }
-    report("both", "enumerate.repeat x5", "CI_VERIFIED", "no hang, no leak observed");
+    report(
+        "both",
+        "enumerate.repeat x5",
+        "CI_VERIFIED",
+        "no hang, no leak observed",
+    );
 }
 
 #[test]
@@ -94,7 +109,10 @@ fn metadata_capability_differs() {
         SerialportBackend::metadata_support(),
         MetadataSupport::NameAndUsbDescriptor
     );
-    assert_eq!(Serial2Backend::metadata_support(), MetadataSupport::NameOnly);
+    assert_eq!(
+        Serial2Backend::metadata_support(),
+        MetadataSupport::NameOnly
+    );
     report(
         "both",
         "metadata capability",
@@ -205,6 +223,11 @@ fn operations_requiring_a_real_device() {
         "COM number changes across replug",
         "handles released after process kill",
     ] {
-        report("both", case, "REQUIRES_WINDOWS_HARDWARE_TEST", "no serial hardware on runner");
+        report(
+            "both",
+            case,
+            "REQUIRES_WINDOWS_HARDWARE_TEST",
+            "no serial hardware on runner",
+        );
     }
 }

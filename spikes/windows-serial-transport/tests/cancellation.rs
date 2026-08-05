@@ -8,11 +8,11 @@
 //! dropping a handle actually unblocks a read in progress on Windows is
 //! REQUIRES_WINDOWS_HARDWARE_TEST.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use spike_windows_serial_transport::watchdog::{with_deadline, Outcome};
+use spike_windows_serial_transport::watchdog::{Outcome, with_deadline};
 
 /// Stand-in for a device that never answers.
 fn silent_source(cancel: Arc<AtomicBool>, budget: Duration) -> Result<usize, &'static str> {
@@ -38,7 +38,10 @@ fn a_bounded_read_always_returns() {
     match outcome {
         Outcome::Completed { value, elapsed } => {
             assert_eq!(value, Err("READ_TIMEOUT"));
-            assert!(elapsed < Duration::from_secs(1), "deadline overshoot: {elapsed:?}");
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "deadline overshoot: {elapsed:?}"
+            );
             println!("[SIMULATED_ONLY] bounded read returned READ_TIMEOUT in {elapsed:?}");
         }
         Outcome::TimedOut { .. } => panic!("a bounded read must never outlive its budget"),

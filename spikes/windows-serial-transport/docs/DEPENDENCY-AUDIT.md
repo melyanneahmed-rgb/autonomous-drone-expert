@@ -146,6 +146,22 @@ contract chosen for this spike is blocking (see `TRANSPORT-CONTRACT.md`).
 
 ## Tooling results
 
-`cargo-deny` and `cargo-audit` results are produced by the `spike-audit` CI job against
-this spike's own `deny.toml`, which allows MPL-2.0 **for the spike only**. The production
-allowlist at the repository root is unchanged and still does not permit MPL-2.0.
+Run against this spike's own `deny.toml`, which allows MPL-2.0 **for the spike only**. The
+production allowlist at the repository root is unchanged and still does not permit
+MPL-2.0.
+
+| Tool | Version | Result |
+| --- | --- | --- |
+| `cargo-deny` | 0.20.2 | `advisories ok, bans ok, licenses ok, sources ok` |
+| `cargo-audit` | latest at run time | 32 crate dependencies scanned, **no vulnerabilities** |
+
+Two notes recorded rather than suppressed:
+
+- `cargo-deny` initially failed `licenses` on **our own package**, because the project is
+  deliberately unlicensed while the licence decision is deferred. Resolved with
+  `[licenses.private] ignore = true`, which applies only to workspace members marked
+  `publish = false` and relaxes nothing for third-party code.
+- `bans` reports duplicate versions of `bitflags` (1.3.2 via `nix` via `serialport`, and
+  2.13.1 via `serialport`) and of `windows-sys` (0.52.0 via `serialport`, 0.61.2 via
+  `serial2`). Warnings, not errors, and expected when two independent serial stacks are
+  linked into one experiment. It would matter if both ever shipped together.

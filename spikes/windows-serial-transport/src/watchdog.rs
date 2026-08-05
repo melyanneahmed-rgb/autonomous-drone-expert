@@ -10,10 +10,15 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome<T> {
-    Completed { value: T, elapsed: Duration },
+    Completed {
+        value: T,
+        elapsed: Duration,
+    },
     /// The call did not return within the deadline. The worker thread is deliberately
     /// left running: there is no safe way to kill it, which is itself a finding.
-    TimedOut { deadline: Duration },
+    TimedOut {
+        deadline: Duration,
+    },
 }
 
 impl<T> Outcome<T> {
@@ -35,7 +40,10 @@ where
         let _ = tx.send(value);
     });
     match rx.recv_timeout(deadline) {
-        Ok(value) => Outcome::Completed { value, elapsed: started.elapsed() },
+        Ok(value) => Outcome::Completed {
+            value,
+            elapsed: started.elapsed(),
+        },
         Err(_) => Outcome::TimedOut { deadline },
     }
 }
