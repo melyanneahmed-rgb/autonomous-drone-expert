@@ -1,12 +1,17 @@
-//! Cancellation and deadline behaviour.
+#![forbid(unsafe_code)]
+
+//! Cancellation and deadline behaviour — SIMULATED_ONLY, without exception.
 //!
 //! Neither candidate offers a cancel primitive: there is no `cancel()`, no shutdown, and
-//! no way to interrupt a blocking read from another thread through the public API. The
-//! only portable tools are (a) a bounded read timeout and (b) dropping the handle.
+//! no way to interrupt a blocking read from another thread through the public API.
 //!
-//! What is proven here is the architecture the production layer would need. Whether
-//! dropping a handle actually unblocks a read in progress on Windows is
-//! REQUIRES_WINDOWS_HARDWARE_TEST.
+//! Honest scope of every test in this file:
+//!   * the cooperative-cancellation pattern here is `SIMULATED_ONLY` — it cancels a
+//!     synthetic loop, not a real blocked `ReadFile`;
+//!   * the watchdog does not stop a hung thread; it only stops waiting for it;
+//!   * whether dropping a handle interrupts a real blocking read on Windows is
+//!     `REQUIRES_WINDOWS_HARDWARE_TEST`;
+//!   * **no candidate holds a proven cancellation advantage yet.**
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,14 +79,17 @@ fn a_hung_call_is_reported_as_failure_not_as_slowness() {
 }
 
 #[test]
-fn dropping_a_handle_is_the_only_available_interrupt() {
-    // Documented as a finding, asserted as an architectural constraint rather than a
-    // library capability: neither candidate exposes an interrupt API.
+fn no_candidate_exposes_a_cancel_primitive_and_none_is_proven() {
+    // Asserted as an API fact (verified by reading both crates at their pinned
+    // versions), stated without overclaiming: handle drop is a *candidate* interrupt
+    // mechanism whose behaviour on a real blocked read is unproven on both libraries.
     let serialport_has_cancel = false;
     let serial2_has_cancel = false;
     assert!(!serialport_has_cancel && !serial2_has_cancel);
     println!(
-        "[SIMULATED_ONLY] no candidate exposes cancel(); production must bound every read \
-         and treat handle drop plus a cancellation flag as the interrupt mechanism"
+        "[SIMULATED_ONLY] no candidate exposes cancel(); production must bound every \
+         read and check a cancellation flag between reads. Handle drop during a real \
+         blocking read is an UNPROVEN candidate mechanism: \
+         REQUIRES_WINDOWS_HARDWARE_TEST. No candidate has a cancellation advantage yet."
     );
 }

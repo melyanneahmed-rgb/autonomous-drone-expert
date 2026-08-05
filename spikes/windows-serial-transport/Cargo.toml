@@ -21,3 +21,5 @@ description = "M1A spike: comparative evaluation of Rust serial-port layers on W
 # on Linux; on Windows the metadata path is unchanged. Recorded in docs/REPORT.md.
 serialport = { version = "=4.9.0", default-features = false }
 serial2 = "=0.2.38"
+# Path-C prototype: independent USB discovery. Pure Rust, no libusb, Apache-2.0 OR MIT.
+nusb = "=0.2.5"

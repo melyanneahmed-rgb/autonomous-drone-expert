@@ -134,6 +134,37 @@ contract chosen for this spike is blocking (see `TRANSPORT-CONTRACT.md`).
 
 ---
 
+## Candidate D — `nusb` (path-C discovery leg, prototyped)
+
+| Field | Value |
+| --- | --- |
+| Version pinned in the spike | `=0.2.5` |
+| Release date | 2026-07-16 |
+| Licence | **Apache-2.0 OR MIT** |
+| Declared MSRV | `UNVERIFIED` (compiles under our pinned 1.97.1 and MSRV job) |
+| Native (C/C++) dependencies | None — pure Rust, no libusb |
+| `unsafe` in our code | Not required (spike compiles under `#![forbid(unsafe_code)]`) |
+| Can it map USB → COM name? | **No, by itself.** Source-verified: no COM/`PortName`/`GUID_DEVINTERFACE_COMPORT` anywhere. It exposes the Windows `instance_id` join key |
+| VID/PID / serial / strings | Yes, cross-platform |
+| Device instance ID | Yes (Windows). Container ID: not exposed — `UNVERIFIED` whether obtainable without SetupAPI |
+| Hotplug | Yes — `watch_devices()` |
+| Windows x64 / ARM64 | x64 exercised in CI; ARM64 `UNVERIFIED` |
+
+**Decision (spike scope): `ACCEPT WITH CONDITIONS`** — as the USB-enumeration leg of
+path C only; the COM join is separate work with its own audit (below), and hardware
+validation is required.
+
+## Path-C join options for USB → COM (evaluated, not implemented)
+
+| Option | Version | Licence | MSRV | `unsafe` in our code | Native deps | Can produce COM name? | Decision |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `windows-sys` (SetupAPI/CfgMgr32 FFI) | 0.61.2 | MIT OR Apache-2.0 | 1.71 | **Yes** — raw FFI calls | None (bindings) | **Yes** — documented mechanism: device interface `GUID_DEVINTERFACE_COMPORT` / child devnode `PortName` registry value | `ACCEPT WITH CONDITIONS`: own `unsafe` module, dedicated review, hardware validation |
+| `windows` (typed wrappers) | 0.62.2 | MIT OR Apache-2.0 | 1.82 | **Yes** — the API calls remain `unsafe` | None | Yes, same mechanism | Same conditions; heavier crate |
+| `wmi` (WMI queries) | 0.18.4 | MIT OR Apache-2.0 | `UNVERIFIED` | No | None (COM via wrappers) | Partially — `Win32_PnPEntity`/`Win32_SerialPort` queries; relies on WMI service availability and name parsing | `ACCEPT WITH CONDITIONS`: fragility and runtime dependency must be measured on hardware |
+
+None of the three is implemented in this spike; the spike crate forbids `unsafe`, and the
+join is deliberately left as documented, auditable future work.
+
 ## Cross-cutting observations
 
 - **Duplicate `windows-sys`.** The resolved lock contains `windows-sys 0.52.0`
@@ -148,12 +179,13 @@ contract chosen for this spike is blocking (see `TRANSPORT-CONTRACT.md`).
 
 Run against this spike's own `deny.toml`, which allows MPL-2.0 **for the spike only**. The
 production allowlist at the repository root is unchanged and still does not permit
-MPL-2.0.
+MPL-2.0. Both tools are **pinned in the workflow to the exact versions below** — an
+unpinned install would let the gate drift from this report.
 
-| Tool | Version | Result |
+| Tool | Version (pinned) | Result |
 | --- | --- | --- |
-| `cargo-deny` | 0.20.2 | `advisories ok, bans ok, licenses ok, sources ok` |
-| `cargo-audit` | latest at run time | 32 crate dependencies scanned, **no vulnerabilities** |
+| `cargo-deny` | 0.20.2 | `advisories ok, bans ok, licenses ok, sources ok` (re-run after adding `nusb`) |
+| `cargo-audit` | 0.22.2 | 42 crate dependencies scanned (with `nusb`), **no vulnerabilities** |
 
 Two notes recorded rather than suppressed:
 

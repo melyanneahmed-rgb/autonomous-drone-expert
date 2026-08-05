@@ -33,9 +33,13 @@ this plan sends MSP, writes configuration, or reboots a flight controller.**
 | 12 | Process kill | Kill the process mid-read | The port is immediately openable again; no orphaned handle | Reopen latency after kill |
 | 13 | COM above 9 | Force the adapter to COM12 via Device Manager | Opens normally through the `\\.\` device namespace | Success or exact failure |
 | 14 | Driver absent | Test with a device whose driver is not installed | A named diagnosis, never a generic failure | Mapped variant |
+| 15 | USB → COM join (path C) | Enumerate the adapter with `nusb`, record its instance ID, resolve its COM name via the SetupAPI/registry mechanism, open that COM with `serial2` | The COM name resolved from USB identity matches the port the device actually answers on | Instance ID, resolved name, open result |
+| 16 | Twin devices without serials | Two same-model adapters that report no serial number; unplug one, replug it elsewhere | Resolution is `AMBIGUOUS_DEVICE_IDENTITY`; no automatic rename; writes stay blocked until re-identification | Resolution output for both libraries |
 
 ## Acceptance for the M1B decision
 
-The library choice is not final until tests 4, 5, 7, 8, 10 and 12 have results on real
-hardware for **both** candidates. Test 8 in particular decides whether cancellation is
-workable at all, and no amount of CI can answer it.
+The architecture choice is not final until tests 4, 5, 7, 8, 10, 12, 15 and 16 have
+results on real hardware. Test 8 decides whether any cancellation mechanism exists at
+all; test 15 decides whether path C is buildable; test 16 decides how each architecture
+degrades when serial numbers are absent — the case the corrected identity model treats
+as never-unique.

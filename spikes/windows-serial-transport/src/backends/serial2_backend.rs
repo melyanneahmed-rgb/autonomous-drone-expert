@@ -46,7 +46,7 @@ impl SpikeTransport for Serial2Backend {
             .map_err(|e| classify_io_error(&e, Op::Read))
     }
 
-    fn write(&mut self, buf: &[u8]) -> Result<usize, TransportError> {
+    fn write_some(&mut self, buf: &[u8]) -> Result<usize, TransportError> {
         self.inner
             .write(buf)
             .map_err(|e| classify_io_error(&e, Op::Write))

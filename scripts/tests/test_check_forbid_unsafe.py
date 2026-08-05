@@ -2,6 +2,11 @@
 
 The gate must detect `unsafe` in code and must not fire on prose. Firing on prose
 punishes documentation, which is how a rule quietly stops being written about.
+
+Note: the comment-stripping under test is a spike-branch experiment REJECTED FOR
+PRODUCTION (see the module docstring in check_forbid_unsafe.py). The last test below
+documents its known miss -- a `//` inside a string literal hides the rest of the line --
+as an executable statement of the limitation rather than a claim of safety.
 """
 
 from __future__ import annotations
@@ -46,6 +51,13 @@ class StripCommentsTests(unittest.TestCase):
 
     def test_unsafe_after_a_comment_on_the_same_line_is_still_flagged(self) -> None:
         self.assert_flagged("unsafe { f() } // note\n", True)
+
+    def test_known_limitation_slash_slash_in_string_literal_hides_the_line_tail(self) -> None:
+        # DOCUMENTED MISS, not a feature: the regex treats "//" inside a string literal
+        # as a comment, so an unsafe token later on the same line escapes this scan.
+        # The compiler-level forbid(unsafe_code) declaration still rejects it at build
+        # time. This is exactly why the approach is rejected for production.
+        self.assert_flagged('let s = "https://x"; unsafe { f() }\n', False)
 
 
 if __name__ == "__main__":

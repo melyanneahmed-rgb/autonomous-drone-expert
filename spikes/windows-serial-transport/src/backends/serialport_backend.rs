@@ -51,7 +51,7 @@ impl SpikeTransport for SerialportBackend {
         std::io::Read::read(&mut self.inner, buf).map_err(|e| classify_io_error(&e, Op::Read))
     }
 
-    fn write(&mut self, buf: &[u8]) -> Result<usize, TransportError> {
+    fn write_some(&mut self, buf: &[u8]) -> Result<usize, TransportError> {
         std::io::Write::write(&mut self.inner, buf).map_err(|e| classify_io_error(&e, Op::Write))
     }
 

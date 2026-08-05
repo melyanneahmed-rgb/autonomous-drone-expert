@@ -7,6 +7,23 @@ transport crate. Relaxing this is a dedicated pull request with written justific
 owner review -- never a quiet edit.
 
 Standard library only.
+
+SPIKE-BRANCH EXPERIMENT -- comment stripping is REJECTED FOR PRODUCTION
+-----------------------------------------------------------------------
+On this branch only, the token scan strips comments first so that prose *about* unsafe
+(doc comments, design notes) does not fail the gate. That stripping is regex-based and is
+NOT reliable protection: a `//` inside a string literal is treated as a comment start,
+which deletes the remainder of that line and can hide a real `unsafe` token appearing
+later on it. Example the regex gets wrong:
+
+    let s = "https://x"; unsafe { f() }   // remainder after "//" vanishes from the scan
+
+Because of that failure mode, this modification must NOT be promoted to `main` as the
+production gate. The reliable layers remain: (1) the mandatory `#![forbid(unsafe_code)]`
+declaration in every crate, which makes the *compiler* reject unsafe code regardless of
+what this script sees, and (2) human review. Any future production improvement to this
+scanner needs a proper tokenizer/parser, or compiler-level enforcement alone, in its own
+reviewed pull request.
 """
 
 from __future__ import annotations
@@ -23,18 +40,19 @@ _LINE_COMMENT = re.compile(r"//[^\n]*")
 
 
 def strip_comments(source: str) -> str:
-    """Remove Rust comments so the gate scans code, not prose.
+    """Remove Rust comments so the gate scans code, not prose. EXPERIMENTAL.
 
     Without this, any file that merely *discusses* unsafe code -- a doc comment, a design
-    note, this project's own architecture documentation inside a module header -- fails
-    the gate. That is a false positive that teaches people to avoid writing about the
-    rule, which is the opposite of what the rule is for.
+    note, a module header -- fails the gate, which teaches people to avoid writing about
+    the rule.
 
-    The stripping is intentionally simple and errs toward removing too much: a `//`
-    sequence inside a string literal will be treated as a comment. That direction is
-    safe for this gate, because removing more text can only cause a missed detection in
-    a construction that does not occur in this codebase, and the declaration check plus
-    review cover the remainder.
+    This implementation is regex-based and therefore NOT reliable: a `//` inside a string
+    literal is treated as a comment start and hides the rest of that line from the scan,
+    including any real `unsafe` token after it. That is a genuine missed-detection path.
+    It is tolerated on the spike branch only because the compiler-enforced
+    `#![forbid(unsafe_code)]` declaration -- which this script independently verifies is
+    present in every crate -- rejects unsafe code regardless of this scan. REJECTED FOR
+    PRODUCTION; see the module docstring.
     """
     return _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", source))
 

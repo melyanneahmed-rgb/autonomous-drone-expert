@@ -68,11 +68,29 @@ impl Default for OpenConfig {
     }
 }
 
+/// A failed or incomplete complete-write, reporting exactly how far it got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteAllFailure {
+    /// Bytes actually accepted by the transport before the failure.
+    pub bytes_written: usize,
+    pub error: TransportError,
+}
+
 /// The contract both candidates are driven through.
 ///
 /// Blocking on purpose. Cancellation and reconnection are modelled above this layer
 /// rather than assumed from the library, because neither candidate offers a real
-/// cancel primitive (see `docs/REPORT.md`).
+/// cancel primitive (see `docs/REPORT.md` — and note that the cooperative pattern there
+/// is `SIMULATED_ONLY`, not a proven interrupt).
+///
+/// ## `write_some` versus `write_all_with_deadline`
+///
+/// `write_some` is the primitive both libraries actually provide: it may accept **any
+/// prefix** of the buffer, including zero bytes, and returning is not success. A
+/// protocol frame is only sent when *all* of its bytes are accepted, so the session
+/// layer must drive `write_some` in a loop under a deadline — that loop is
+/// [`write_all_with_deadline`], and success is declared **only** when every byte was
+/// accepted.
 pub trait SpikeTransport: Sized {
     fn backend_name() -> &'static str;
     fn metadata_support() -> MetadataSupport;
@@ -81,7 +99,64 @@ pub trait SpikeTransport: Sized {
     fn open(port_name: &str, config: OpenConfig) -> Result<Self, TransportError>;
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError>;
-    fn write(&mut self, buf: &[u8]) -> Result<usize, TransportError>;
+
+    /// Write **some prefix** of `buf`. May accept fewer bytes than offered, including
+    /// zero. Never interpret a return as "the payload was sent".
+    fn write_some(&mut self, buf: &[u8]) -> Result<usize, TransportError>;
+
     fn flush(&mut self) -> Result<(), TransportError>;
     fn close(self) -> Result<(), TransportError>;
+
+    /// Drive [`Self::write_some`] until every byte of `buf` is accepted or the deadline
+    /// expires. Success means *all* bytes were written — nothing less.
+    fn write_all_with_deadline(
+        &mut self,
+        buf: &[u8],
+        deadline: Duration,
+    ) -> Result<usize, WriteAllFailure> {
+        let started = std::time::Instant::now();
+        write_all_with_deadline_impl(
+            |chunk| self.write_some(chunk),
+            buf,
+            deadline,
+            || started.elapsed(),
+        )
+    }
+}
+
+/// Deadline-bounded complete-write loop with an injected clock, so the timeout and
+/// disconnect paths are testable deterministically without hardware and without real
+/// waiting.
+pub fn write_all_with_deadline_impl<W, C>(
+    mut write_some: W,
+    buf: &[u8],
+    deadline: Duration,
+    mut elapsed: C,
+) -> Result<usize, WriteAllFailure>
+where
+    W: FnMut(&[u8]) -> Result<usize, TransportError>,
+    C: FnMut() -> Duration,
+{
+    let mut written = 0usize;
+    // A zero-byte payload is complete by definition; the transport is not consulted.
+    while written < buf.len() {
+        if elapsed() >= deadline {
+            return Err(WriteAllFailure {
+                bytes_written: written,
+                error: TransportError::WriteTimeout,
+            });
+        }
+        match write_some(&buf[written..]) {
+            // Zero accepted bytes is lack of progress, not an error and not success.
+            // The loop keeps trying until the deadline expires.
+            Ok(n) => written += n,
+            Err(error) => {
+                return Err(WriteAllFailure {
+                    bytes_written: written,
+                    error,
+                });
+            }
+        }
+    }
+    Ok(written)
 }

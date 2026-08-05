@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Error-model coverage — SIMULATED_ONLY.
 //!
 //! Real Windows codes cannot be produced without a device, so the mapping is exercised

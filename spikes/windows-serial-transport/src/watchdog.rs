@@ -3,6 +3,12 @@
 //! Every candidate call in this spike runs under a watchdog, because the failure this
 //! project cannot tolerate is not an error — it is a call that never returns and freezes
 //! the interface. A hung call is reported as a failure, not as a slow success.
+//!
+//! **What this is not:** cancellation. The watchdog stops *waiting* for a hung call; it
+//! does not and cannot stop the call. The worker thread keeps running. Whether anything
+//! can interrupt a real blocking read on Windows (for example by dropping the handle
+//! from another thread) is `REQUIRES_WINDOWS_HARDWARE_TEST` and remains unproven for
+//! both candidates.
 
 use std::sync::mpsc;
 use std::thread;

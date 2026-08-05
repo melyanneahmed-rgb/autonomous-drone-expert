@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Shared harness: both candidates are driven through identical assertions.
 //!
 //! Every result is labelled with what it actually proves:

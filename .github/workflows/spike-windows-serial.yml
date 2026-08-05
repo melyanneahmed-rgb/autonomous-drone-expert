@@ -74,8 +74,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      - name: Install audit tooling
-        run: cargo install --locked cargo-deny cargo-audit
+      # Pinned exactly to the versions that produced the recorded audit results
+      # (cargo-deny 0.20.2, cargo-audit 0.22.2, verified locally on 2026-08-05).
+      # Unpinned installs would let the gate drift from the report.
+      - name: Install audit tooling (pinned)
+        run: cargo install --locked cargo-deny@0.20.2 cargo-audit@0.22.2
 
       # No --all-features: enabling serialport's default "libudev" feature makes the
       # dependency graph require system libudev, which is exactly the build failure this
