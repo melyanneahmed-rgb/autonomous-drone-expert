@@ -1,0 +1,10 @@
+[package]
+name = "ade-fault-injection"
+description = "Deterministic fault injection harness: timeouts, disconnects, power loss and process kill."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

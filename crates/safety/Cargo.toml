@@ -1,0 +1,10 @@
+[package]
+name = "ade-safety"
+description = "Safety invariants and validator. Holds absolute interrupt authority over every other engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

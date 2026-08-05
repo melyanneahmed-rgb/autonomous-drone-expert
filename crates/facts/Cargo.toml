@@ -1,0 +1,10 @@
+[package]
+name = "ade-facts"
+description = "Fact and confidence model: value, source, timestamp, firmware scope and proof method."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

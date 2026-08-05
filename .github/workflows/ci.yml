@@ -1,0 +1,93 @@
+# Foundation CI.
+#
+# Scope note (honesty): these gates cover only what this repository actually contains
+# today -- a structural workspace with zero dependencies, documentation, provenance
+# records and policy scripts. Gates for Tauri, React, Vitest, Playwright, cargo-fuzz,
+# property tests, serial/USB/DFU, hardware and release publishing are deliberately
+# absent and are added in the same pull requests that introduce those components.
+#
+# Action pinning: actions are pinned to an exact release tag. Pinning to a commit SHA
+# could not be completed in the environment that authored this file, because the GitHub
+# API for third-party repositories was not reachable from it. Converting these tags to
+# SHAs is a tracked follow-up pull request.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy-gates:
+    name: policy-gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Report Python version
+        run: python3 --version
+
+      - name: Isolation, dependency and publication gates
+        run: python3 scripts/check_isolation.py
+
+      - name: Unsafe-Rust gate
+        run: python3 scripts/check_forbid_unsafe.py
+
+      - name: Provenance gate
+        run: python3 scripts/validate_provenance.py
+
+      - name: Local secret-pattern scan
+        run: python3 scripts/check_secrets.py
+
+  rust-linux:
+    name: rust-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Report pinned toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+          rustc --version
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  rust-windows:
+    name: rust-windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Report pinned toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+          rustc --version
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace

@@ -1,0 +1,13 @@
+# Exact pinned toolchain. Reproducibility beats "latest".
+#
+# This pin is separate from the documented MSRV in Cargo.toml ([workspace.package]
+# rust-version). Raising either value is a dedicated pull request. Nightly is never the
+# project toolchain; any future fuzzing job pins its own nightly separately.
+#
+# Verified against the official Rust release channel on 2026-08-05:
+#   stable = 1.97.1 (8bab26f4f, released 2026-07-14)
+
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

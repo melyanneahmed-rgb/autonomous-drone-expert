@@ -1,0 +1,32 @@
+# Ownership and review routing.
+#
+# NOTE: "Require review from Code Owners" is intentionally NOT enabled on main while this
+# repository has a single account. Enabling it would make every pull request unmergeable,
+# because the author cannot approve their own pull request. This file therefore documents
+# ownership today and becomes enforceable the moment an independent reviewer exists.
+# See docs/m0/foundations-gate.md section 1.
+
+# Default owner
+*                                   @melyanneahmed-rgb
+
+# Safety-critical and write-authority paths (never delegated)
+/crates/safety/                     @melyanneahmed-rgb
+/crates/execution/                  @melyanneahmed-rgb
+/crates/recovery/                   @melyanneahmed-rgb
+
+# Protocol layer: every change requires provenance review
+/crates/protocol-msp/               @melyanneahmed-rgb
+/crates/protocol-cli/               @melyanneahmed-rgb
+/provenance/                        @melyanneahmed-rgb
+
+# Governance: foundational document, decisions and gates
+/docs/foundational/                 @melyanneahmed-rgb
+/docs/adr/                          @melyanneahmed-rgb
+/docs/m0/                           @melyanneahmed-rgb
+
+# Quality gates and toolchain pinning must not be weakened silently
+/.github/                           @melyanneahmed-rgb
+/scripts/                           @melyanneahmed-rgb
+/deny.toml                          @melyanneahmed-rgb
+/rust-toolchain.toml                @melyanneahmed-rgb
+/Cargo.toml                         @melyanneahmed-rgb

@@ -1,0 +1,10 @@
+[package]
+name = "ade-transport-dfu"
+description = "DFU transport interface only. Implementation deferred to a separate audited batch."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

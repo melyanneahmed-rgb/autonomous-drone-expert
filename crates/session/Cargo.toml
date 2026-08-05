@@ -1,0 +1,10 @@
+[package]
+name = "ade-session"
+description = "Request and response session management: queueing, timeouts, cancellation and reconnection."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

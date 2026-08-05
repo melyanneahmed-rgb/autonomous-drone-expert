@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0.0",
+  "title": "Provenance record",
+  "description": "Minimal self-contained schema for one protocol fact. Enforced by scripts/validate_provenance.py using only the Python standard library.",
+  "type": "object",
+  "required": [
+    "record_id",
+    "kind",
+    "name",
+    "value",
+    "firmware",
+    "source",
+    "payload_layout",
+    "status",
+    "verification",
+    "licensing"
+  ],
+  "properties": {
+    "record_id": { "type": "string" },
+    "kind": { "type": "string", "enum": ["command_id", "payload_layout", "setting", "behaviour"] },
+    "name": { "type": "string" },
+    "value": { "type": ["integer", "string", "null"] },
+    "firmware": {
+      "type": "object",
+      "required": ["family", "version"],
+      "properties": {
+        "family": { "type": "string", "enum": ["Betaflight", "INAV"] },
+        "version": { "type": "string" },
+        "msp_api_version": { "type": ["string", "null"] }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["type", "ref_kind", "ref", "retrieved_at"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "official_documentation",
+            "upstream_firmware_source_read",
+            "program_observed",
+            "manufacturer_documentation"
+          ]
+        },
+        "repository": { "type": ["string", "null"] },
+        "ref_kind": { "type": "string", "enum": ["tag", "commit", "document_version"] },
+        "ref": {
+          "type": "string",
+          "description": "Pinned tag, commit SHA or document version. Moving branches are rejected.",
+          "forbidden_values": ["master", "main", "HEAD", "head", "latest", "dev", "develop"]
+        },
+        "path": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] },
+        "retrieved_at": { "type": "string", "description": "ISO date YYYY-MM-DD" },
+        "retrieved_by": { "type": ["string", "null"] }
+      }
+    },
+    "payload_layout": {
+      "type": ["object", "null"],
+      "description": "Null until established under this policy. Never populated by assumption."
+    },
+    "status": { "type": "string", "enum": ["UNVERIFIED", "MOCK_VERIFIED", "HARDWARE_VERIFIED"] },
+    "verification": {
+      "type": "object",
+      "required": ["method"],
+      "properties": {
+        "method": { "type": "string" },
+        "mock_verified_at": { "type": ["string", "null"] },
+        "hardware_verified_at": { "type": ["string", "null"] }
+      }
+    },
+    "licensing": {
+      "type": "object",
+      "required": ["copied_material", "note"],
+      "properties": {
+        "copied_material": {
+          "type": "boolean",
+          "description": "Must be false. Copied material is prohibited by ADR-0004."
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "notes": { "type": ["string", "null"] }
+  },
+  "invariants": [
+    "source.ref must not be a moving branch",
+    "licensing.copied_material must be false",
+    "payload_layout must be null unless status is HARDWARE_VERIFIED",
+    "status HARDWARE_VERIFIED requires verification.hardware_verified_at",
+    "status MOCK_VERIFIED requires verification.mock_verified_at"
+  ]
+}

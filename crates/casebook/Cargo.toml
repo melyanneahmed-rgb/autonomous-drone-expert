@@ -1,0 +1,10 @@
+[package]
+name = "ade-casebook"
+description = "Crash-safe local case recording under the privacy constraints. Local only, never uploaded."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

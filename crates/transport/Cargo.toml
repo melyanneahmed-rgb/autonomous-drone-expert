@@ -1,0 +1,10 @@
+[package]
+name = "ade-transport"
+description = "Physical link abstraction: serial ports and USB enumeration behind replaceable traits. Only crate permitted to hold OS-specific code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]

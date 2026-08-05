@@ -1,0 +1,10 @@
+[package]
+name = "ade-backup"
+description = "Configuration snapshot, checksum and compatibility-guarded restore."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No dependencies. Adding one requires its own reviewed pull request.
+[dependencies]
