@@ -13,9 +13,10 @@ enum class TestStage {
  * spike on a bench cannot certify readiness. Every result is an observation.
  */
 enum class ObservationStatus {
-    OBSERVED,          // the stage ran and produced evidence
-    CLASSIFIED_ERROR,  // the stage produced a classified error (still an observation)
-    NOT_RUN,           // pending
+    OBSERVED,             // the stage ran and produced evidence
+    OBSERVED_WITH_ERRORS, // the stage ran but some reads returned classified errors
+    CLASSIFIED_ERROR,     // the stage produced a classified error (still an observation)
+    NOT_RUN,              // pending
 }
 
 data class HardwareObservation(

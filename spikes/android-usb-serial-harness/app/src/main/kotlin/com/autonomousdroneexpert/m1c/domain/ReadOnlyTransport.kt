@@ -29,9 +29,20 @@ interface ReadOnlySession {
 /**
  * The result of one read. On [Data], only a byte **count** and elapsed time are carried --
  * never the bytes themselves.
+ *
+ * [TimedOut] is deliberately honest: on Android a non-positive `bulkTransfer` result cannot
+ * be distinguished from an I/O error, so a timeout inferred from "waited ~ the full timeout
+ * with the device still present" is marked [inferred] with a [basis] string. A determinate
+ * (simulated) timeout leaves [inferred] false.
+ *
+ * [Failed] carries [elapsedMs] so disconnect/error timing is preserved in reports.
  */
 sealed interface ReadOutcome {
     data class Data(val byteCount: Int, val elapsedMs: Double) : ReadOutcome
-    data class TimedOut(val elapsedMs: Double) : ReadOutcome
-    data class Failed(val error: ClassifiedError) : ReadOutcome
+    data class TimedOut(
+        val elapsedMs: Double,
+        val inferred: Boolean = false,
+        val basis: String = "",
+    ) : ReadOutcome
+    data class Failed(val error: ClassifiedError, val elapsedMs: Double = 0.0) : ReadOutcome
 }

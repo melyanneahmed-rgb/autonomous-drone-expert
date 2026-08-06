@@ -11,8 +11,10 @@ import com.autonomousdroneexpert.m1c.domain.Openable
 import com.autonomousdroneexpert.m1c.domain.OpenResult
 import com.autonomousdroneexpert.m1c.domain.ReadOnlySession
 import com.autonomousdroneexpert.m1c.domain.ReadOutcome
+import com.autonomousdroneexpert.m1c.domain.TransportClassifiers
 import com.autonomousdroneexpert.m1c.domain.TransportError
 import com.autonomousdroneexpert.m1c.domain.UsbDeviceInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -39,25 +41,33 @@ class AndroidUsbTransport(
                 ClassifiedError(TransportError.PERMISSION_DENIED, "no USB permission for ${device.deviceName}")
             )
         }
-        val (iface, inEndpoint) = findBulkInEndpoint(device)
-            ?: return@withContext OpenResult.Failed(
-                ClassifiedError(TransportError.DRIVER_UNSUPPORTED, "no bulk IN endpoint on ${device.deviceName}")
+        // openDevice / claimInterface can throw (driver/permission races). Any unexpected
+        // throwable is classified safely as UNKNOWN_IO_ERROR; cancellation is re-thrown.
+        try {
+            val (iface, inEndpoint) = findBulkInEndpoint(device)
+                ?: return@withContext OpenResult.Failed(
+                    ClassifiedError(TransportError.DRIVER_UNSUPPORTED, "no bulk IN endpoint on ${device.deviceName}")
+                )
+            val connection: UsbDeviceConnection = manager.openDevice(device)
+                ?: return@withContext OpenResult.Failed(
+                    ClassifiedError(TransportError.OPEN_FAILED, "openDevice returned null (busy or gone)")
+                )
+            if (!connection.claimInterface(iface, true)) {
+                connection.close()
+                return@withContext OpenResult.Failed(
+                    ClassifiedError(TransportError.PORT_BUSY, "claimInterface failed (interface busy)")
+                )
+            }
+            // baud is accepted for parity with the contract; we deliberately do NOT send a
+            // SET_LINE_CODING control transfer (that would be an OUT control transfer).
+            OpenResult.Opened(
+                AndroidReadOnlySession(manager, device, connection, iface, inEndpoint, readTimeoutMs)
             )
-        val connection: UsbDeviceConnection = manager.openDevice(device)
-            ?: return@withContext OpenResult.Failed(
-                ClassifiedError(TransportError.OPEN_FAILED, "openDevice returned null (busy or gone)")
-            )
-        if (!connection.claimInterface(iface, true)) {
-            connection.close()
-            return@withContext OpenResult.Failed(
-                ClassifiedError(TransportError.PORT_BUSY, "claimInterface failed (interface busy)")
-            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            OpenResult.Failed(TransportClassifiers.classifyThrowable(t))
         }
-        // baud is accepted for parity with the contract; we deliberately do NOT send a
-        // SET_LINE_CODING control transfer (that would be an OUT control transfer).
-        OpenResult.Opened(
-            AndroidReadOnlySession(manager, device, connection, iface, inEndpoint, readTimeoutMs)
-        )
     }
 
     private fun findBulkInEndpoint(device: UsbDevice): Pair<UsbInterface, UsbEndpoint>? {
@@ -89,15 +99,24 @@ private class AndroidReadOnlySession(
 
     override suspend fun read(): ReadOutcome = withContext(Dispatchers.IO) {
         val start = System.nanoTime()
-        // IN-direction bulk read only. The returned bytes are never inspected or logged.
-        val n = connection.bulkTransfer(inEndpoint, buffer, buffer.size, readTimeoutMs)
-        val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
-        when {
-            n > 0 -> ReadOutcome.Data(byteCount = n, elapsedMs = elapsedMs)
-            deviceStillPresent() -> ReadOutcome.TimedOut(elapsedMs)
-            else -> ReadOutcome.Failed(
-                ClassifiedError(TransportError.DEVICE_DISCONNECTED, "device no longer enumerated")
+        try {
+            // IN-direction bulk read only. The returned bytes are never inspected or logged;
+            // only the count matters. A non-positive result is ambiguous on Android, so the
+            // honest classification (data / inferred-timeout / io-error / disconnect) is
+            // decided by the pure classifier, never asserted as a confirmed timeout here.
+            val n = connection.bulkTransfer(inEndpoint, buffer, buffer.size, readTimeoutMs)
+            val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+            TransportClassifiers.classifyBulkRead(
+                result = n,
+                elapsedMs = elapsedMs,
+                configuredTimeoutMs = readTimeoutMs,
+                deviceStillPresent = deviceStillPresent(),
             )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+            ReadOutcome.Failed(TransportClassifiers.classifyThrowable(t), elapsedMs = elapsedMs)
         }
     }
 
@@ -105,8 +124,13 @@ private class AndroidReadOnlySession(
         manager.deviceList.values.any { it.deviceId == device.deviceId }
 
     override fun close() {
+        // A releaseInterface failure must not prevent the close, nor mask it: swallow the
+        // release error but always attempt close. close() may still throw, and the caller
+        // (single-open records it; other stages close quietly) decides how to record it.
         try {
             connection.releaseInterface(iface)
+        } catch (_: Throwable) {
+            // release failure is non-fatal; proceed to close.
         } finally {
             connection.close()
         }

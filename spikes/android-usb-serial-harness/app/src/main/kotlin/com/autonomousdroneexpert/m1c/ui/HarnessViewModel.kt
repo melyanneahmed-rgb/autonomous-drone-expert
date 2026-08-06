@@ -70,7 +70,13 @@ class HarnessViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun runSingleOpen() = launchTest("single-open") { runner.singleOpen(it, 115_200, 250) }
+    fun runSingleOpen() = launchTest("single-open") {
+        runner.singleOpen(it, 115_200, 250, onPortOpen = {
+            _state.value = _state.value.copy(
+                message = "المنفذ مفتوح الآن — راقب مؤشرات LED وأي إعادة تعداد على اللوحة",
+            )
+        })
+    }
     fun runOpenClose() = launchTest("open-close x20") { runner.openCloseCycles(it, 20, 115_200, 250) }
     fun runReadTimeout() = launchTest("read-timeout") { runner.readTimeoutAccuracy(it, 250, 100) }
     fun runUnplug() = launchTest("unplug-detection") { runner.unplugDetection(it, 1000, 120) }
@@ -92,16 +98,28 @@ class HarnessViewModel(app: Application) : AndroidViewModel(app) {
         testJob?.cancel()
         _state.value = _state.value.copy(running = name, message = null)
         testJob = viewModelScope.launch {
-            val obs = try {
-                block(openable)
-            } catch (_: kotlinx.coroutines.CancellationException) {
-                _state.value = _state.value.copy(running = null, message = "أُلغي الاختبار (إلغاء coroutine؛ ليس دليلًا على إلغاء I/O في الـdriver)")
-                return@launch
+            try {
+                val obs = block(openable)
+                _state.value = _state.value.copy(
+                    observations = _state.value.observations + obs,
+                    running = null,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Do not hide cancellation: clear the running flag, note it, then re-throw so
+                // the coroutine is properly cancelled. Coroutine cancellation is NOT proof the
+                // driver read was cancelled.
+                _state.value = _state.value.copy(
+                    running = null,
+                    message = "أُلغي الاختبار (إلغاء coroutine؛ ليس دليلًا على إلغاء I/O في الـdriver)",
+                )
+                throw e
+            } catch (t: Throwable) {
+                // Any unexpected error must free the UI, not leave it stuck on "running".
+                _state.value = _state.value.copy(
+                    running = null,
+                    message = "خطأ غير متوقع (${t.javaClass.simpleName}): ${t.message ?: "بدون رسالة"}",
+                )
             }
-            _state.value = _state.value.copy(
-                observations = _state.value.observations + obs,
-                running = null,
-            )
         }
     }
 

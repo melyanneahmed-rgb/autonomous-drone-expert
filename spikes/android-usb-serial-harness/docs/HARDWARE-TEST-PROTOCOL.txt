@@ -51,12 +51,16 @@ STEP 3 - USB PERMISSION
 - Confirm the device now shows permission = granted. Note: granting permission
   does NOT open the device.
 
-STEP 4 - SINGLE OPEN OBSERVATION
---------------------------------
+STEP 4 - SINGLE OPEN OBSERVATION (3-second dwell)
+-------------------------------------------------
 - Select the device, go to Tests, tap "فتح واحد وملاحظة" (Single open).
-- WATCH the board during the brief open: LED restart? re-enumeration? DFU?
-  sound? If anything unexpected happens, STOP and record
+- The port is now HELD OPEN for ~3 seconds (not an instant open/close). The app
+  shows "المنفذ مفتوح الآن — راقب مؤشرات LED وأي إعادة تعداد على اللوحة".
+- WATCH the board for the whole dwell: LED restart? re-enumeration? DFU? sound?
+  If anything unexpected happens, STOP and record
   "UNEXPECTED OPEN SIDE EFFECT - INVESTIGATION REQUIRED"; do not run the cycles.
+- The observation records open latency, dwell duration, and close outcome. It stays
+  HARDWARE_OBSERVED only -- never a PASS.
 
 STEP 5 - OPEN/CLOSE x20
 -----------------------

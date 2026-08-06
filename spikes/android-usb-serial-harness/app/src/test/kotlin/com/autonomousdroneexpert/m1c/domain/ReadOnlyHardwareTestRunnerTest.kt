@@ -92,4 +92,84 @@ class ReadOnlyHardwareTestRunnerTest {
         job.join()
         assertTrue("cancellation propagated", caught || job.isCancelled)
     }
+
+    @Test
+    fun `single open holds the port open for the dwell then closes cleanly`() = runTest {
+        val session = FakeReadOnlySession(mutableListOf())
+        val target = object : Openable {
+            override val info = FakeOpenable.info()
+            override suspend fun open(baud: Int, readTimeoutMs: Int) = OpenResult.Opened(session)
+        }
+        // Clock tied to virtual time so the dwell is measurable and deterministic.
+        val timed = ReadOnlyHardwareTestRunner(clock = { testScheduler.currentTime })
+        var openWhileNotClosed = false
+        val obs = timed.singleOpen(target, 115_200, 250, dwellMs = 3_000, onPortOpen = {
+            openWhileNotClosed = !session.closed
+        })
+        assertEquals(ObservationStatus.OBSERVED, obs.status)
+        assertTrue("callback fired while port still open", openWhileNotClosed)
+        assertTrue("port closed after the dwell", session.closed)
+        assertTrue("records dwell duration", obs.detail.contains("dwell=3000"))
+        assertTrue("records open latency", obs.detail.contains("open_latency="))
+        assertTrue("records close outcome", obs.detail.contains("close=clean"))
+    }
+
+    @Test
+    fun `unexpected exception on open is classified UNKNOWN_IO_ERROR and still yields an observation`() = runTest {
+        val target = object : Openable {
+            override val info = FakeOpenable.info()
+            override suspend fun open(baud: Int, readTimeoutMs: Int): OpenResult =
+                throw IllegalStateException("driver blew up")
+        }
+        val obs = runner.singleOpen(target, 115_200, 250, dwellMs = 0)
+        assertEquals(ObservationStatus.CLASSIFIED_ERROR, obs.status)
+        assertEquals(TransportError.UNKNOWN_IO_ERROR, obs.error)
+    }
+
+    @Test
+    fun `read-timeout accuracy surfaces OBSERVED_WITH_ERRORS when a read fails, not a clean result`() = runTest {
+        val target = FakeOpenable(FakeOpenable.info(), readScript = {
+            mutableListOf(
+                ReadOutcome.TimedOut(250.0),
+                ReadOutcome.Failed(ClassifiedError(TransportError.UNKNOWN_IO_ERROR, "io glitch"), elapsedMs = 12.0),
+                ReadOutcome.TimedOut(262.0),
+            )
+        })
+        val obs = runner.readTimeoutAccuracy(target, timeoutMs = 250, samples = 3)
+        assertEquals(ObservationStatus.OBSERVED_WITH_ERRORS, obs.status)
+        assertEquals(TransportError.UNKNOWN_IO_ERROR, obs.error)
+        assertTrue(obs.detail.contains("other_errors=1"))
+    }
+
+    @Test
+    fun `unplug detection records slice and total timing on the surfaced error`() = runTest {
+        val target = FakeOpenable(FakeOpenable.info(), readScript = {
+            mutableListOf(
+                ReadOutcome.TimedOut(1000.0),
+                ReadOutcome.Failed(ClassifiedError(TransportError.DEVICE_DISCONNECTED, "gone"), elapsedMs = 42.0),
+            )
+        })
+        val obs = runner.unplugDetection(target, timeoutMs = 1000, maxSlices = 10)
+        assertEquals(ObservationStatus.CLASSIFIED_ERROR, obs.status)
+        assertEquals(TransportError.DEVICE_DISCONNECTED, obs.error)
+        assertTrue("slice timing recorded", obs.detail.contains("slice_elapsed=42.0"))
+        assertTrue("total timing recorded", obs.detail.contains("total="))
+    }
+
+    @Test
+    fun `close happens in finally even when a read throws unexpectedly`() = runTest {
+        var closed = false
+        val throwingSession = object : ReadOnlySession {
+            override suspend fun read(): ReadOutcome = throw IllegalStateException("read boom")
+            override fun close() { closed = true }
+        }
+        val target = object : Openable {
+            override val info = FakeOpenable.info()
+            override suspend fun open(baud: Int, readTimeoutMs: Int) = OpenResult.Opened(throwingSession)
+        }
+        val obs = runner.readTimeoutAccuracy(target, timeoutMs = 250, samples = 2)
+        assertTrue("session closed in finally", closed)
+        // The thrown read is classified (UNKNOWN_IO_ERROR), never crashes the stage.
+        assertEquals(ObservationStatus.OBSERVED_WITH_ERRORS, obs.status)
+    }
 }
