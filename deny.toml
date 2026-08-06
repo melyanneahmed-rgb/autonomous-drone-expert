@@ -19,6 +19,13 @@ unmaintained = "all"
 [licenses]
 version = 2
 confidence-threshold = 0.93
+# First-party workspace crates are unpublished (publish = false) and intentionally carry no
+# license yet: the final license decision is deferred (ADR-0004). Skipping our own private
+# crates here is NOT a third-party license allowance and does not expand the allowlist
+# below. EXTERNAL PRODUCTION DEPENDENCIES REMAIN PROHIBITED (ADR-0009 and the isolation
+# gate); the first external dependency ever proposed arrives with its own Dependency Audit,
+# never a quiet edit here.
+private = { ignore = true }
 # Deliberately conservative starting allowlist. Any addition is a reviewed decision,
 # recorded in an ADR, not a silent edit.
 allow = [

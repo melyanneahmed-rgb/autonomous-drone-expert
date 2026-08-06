@@ -118,3 +118,28 @@ jobs:
 
       - name: Check workspace against declared MSRV
         run: cargo +1.85.0 check --workspace --all-targets
+
+  cargo-deny:
+    # Supply-chain gate for the dependency policy (ADR-0009). The workspace may now carry
+    # first-party workspace path dependencies; EXTERNAL production dependencies remain
+    # prohibited. cargo-deny is a real required check here -- never advisory-only, never
+    # continue-on-error. The version is the one already pinned and reviewed for the Windows
+    # spike; changing it is a dedicated pull request.
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Report pinned toolchain
+        run: cargo --version
+
+      - name: Install cargo-deny (pinned, locked)
+        run: cargo install --locked cargo-deny@0.20.2
+
+      - name: Advisories, bans, licenses and sources
+        run: |
+          cargo deny check advisories
+          cargo deny check bans
+          cargo deny check licenses
+          cargo deny check sources
