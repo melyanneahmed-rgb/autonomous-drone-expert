@@ -17,15 +17,11 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read
-
-# Include the tested head SHA so a GitHub run stuck before job creation cannot
-# retain the concurrency group and block validation of a newer revision.
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: true
 
 jobs:
   policy-gates:
