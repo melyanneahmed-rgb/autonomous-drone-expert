@@ -15,7 +15,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Keep the protected branch gate and provide a direct validation path for
+    # the active M1 branch while pull-request event delivery is being repaired.
+    branches: [main, feature/m1-beeper-mock-replay]
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
