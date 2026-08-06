@@ -212,102 +212,82 @@ mod tests {
         assert_eq!(approval.class(), WriteCommandClass::TransientConfig);
     }
 
-    /// Every (class, recovery) pair the matrix accepts, and it authorises on a simulation
-    /// target.
-    #[test]
-    fn every_compatible_pair_is_authorised() {
-        let accepted = [
+    const ALL_WRITE_CLASSES: [WriteCommandClass; 3] = [
+        WriteCommandClass::TransientConfig,
+        WriteCommandClass::PersistentConfig,
+        WriteCommandClass::Reboot,
+    ];
+
+    const ALL_RECOVERY_CLASSES: [RecoveryClass; 6] = [
+        RecoveryClass::NotApplicableNoWrite,
+        RecoveryClass::TransientWritePendingReconcileOnResume,
+        RecoveryClass::AutomaticRollbackSupported,
+        RecoveryClass::RestoreFromBackupSupported,
+        RecoveryClass::ManualRecoveryRequired,
+        RecoveryClass::StateUnknownRecoveryRequired,
+    ];
+
+    const SIMULATION_TARGETS: [ExecutionTarget; 2] =
+        [ExecutionTarget::Mock, ExecutionTarget::Replay];
+
+    /// The authoritative expected matrix, written out independently of the implementation so
+    /// the exhaustive test checks intent rather than restating `recovery_is_compatible`.
+    fn expected_compatible(class: WriteCommandClass, recovery: RecoveryClass) -> bool {
+        matches!(
+            (class, recovery),
             (
                 WriteCommandClass::TransientConfig,
-                RecoveryClass::TransientWritePendingReconcileOnResume,
-            ),
-            (
-                WriteCommandClass::TransientConfig,
-                RecoveryClass::RestoreFromBackupSupported,
-            ),
-            (
+                RecoveryClass::TransientWritePendingReconcileOnResume
+                    | RecoveryClass::RestoreFromBackupSupported,
+            ) | (
                 WriteCommandClass::PersistentConfig,
-                RecoveryClass::AutomaticRollbackSupported,
-            ),
-            (
-                WriteCommandClass::PersistentConfig,
-                RecoveryClass::RestoreFromBackupSupported,
-            ),
-            (
+                RecoveryClass::AutomaticRollbackSupported
+                    | RecoveryClass::RestoreFromBackupSupported,
+            ) | (
                 WriteCommandClass::Reboot,
-                RecoveryClass::ManualRecoveryRequired,
-            ),
-        ];
-        for (class, recovery) in accepted {
-            let approval = authorize_write(ExecutionTarget::Mock, class, recovery)
-                .unwrap_or_else(|e| panic!("expected {class:?}/{recovery:?} to authorise: {e:?}"));
-            assert_eq!(approval.class(), class);
-            assert_eq!(approval.recovery(), recovery);
-        }
+                RecoveryClass::ManualRecoveryRequired
+            )
+        )
     }
 
-    /// Representative incompatible pairs, one for each rejection the matrix must enforce.
+    /// Exhaustive: all 3 write classes x all 6 recovery classes (18 pairs), on both
+    /// simulation targets. Exactly five pairs authorise; the other thirteen are refused with
+    /// `IncompatibleRecoveryClass`.
     #[test]
-    fn every_incompatible_pair_is_refused() {
-        let rejected = [
-            // NotApplicableNoWrite is never valid for a real write or a reboot.
-            (
-                WriteCommandClass::TransientConfig,
-                RecoveryClass::NotApplicableNoWrite,
-            ),
-            (
-                WriteCommandClass::PersistentConfig,
-                RecoveryClass::NotApplicableNoWrite,
-            ),
-            (
-                WriteCommandClass::Reboot,
-                RecoveryClass::NotApplicableNoWrite,
-            ),
-            // StateUnknownRecoveryRequired can never authorise any command.
-            (
-                WriteCommandClass::TransientConfig,
-                RecoveryClass::StateUnknownRecoveryRequired,
-            ),
-            (
-                WriteCommandClass::PersistentConfig,
-                RecoveryClass::StateUnknownRecoveryRequired,
-            ),
-            (
-                WriteCommandClass::Reboot,
-                RecoveryClass::StateUnknownRecoveryRequired,
-            ),
-            // ManualRecoveryRequired is only for a reboot, never a config write.
-            (
-                WriteCommandClass::TransientConfig,
-                RecoveryClass::ManualRecoveryRequired,
-            ),
-            (
-                WriteCommandClass::PersistentConfig,
-                RecoveryClass::ManualRecoveryRequired,
-            ),
-            // AutomaticRollbackSupported is not a recovery posture for a reboot.
-            (
-                WriteCommandClass::Reboot,
-                RecoveryClass::AutomaticRollbackSupported,
-            ),
-            // A transient write cannot claim automatic rollback (that is the persistent path).
-            (
-                WriteCommandClass::TransientConfig,
-                RecoveryClass::AutomaticRollbackSupported,
-            ),
-            // A persistent write cannot claim the transient-reconcile posture.
-            (
-                WriteCommandClass::PersistentConfig,
-                RecoveryClass::TransientWritePendingReconcileOnResume,
-            ),
-        ];
-        for (class, recovery) in rejected {
-            assert_eq!(
-                authorize_write(ExecutionTarget::Replay, class, recovery),
-                Err(WriteGateError::IncompatibleRecoveryClass),
-                "expected {class:?}/{recovery:?} to be refused",
-            );
+    fn the_full_write_by_recovery_matrix_is_enforced() {
+        let mut accepted = 0usize;
+        let mut rejected = 0usize;
+        for class in ALL_WRITE_CLASSES {
+            for recovery in ALL_RECOVERY_CLASSES {
+                for target in SIMULATION_TARGETS {
+                    let result = authorize_write(target, class, recovery);
+                    if expected_compatible(class, recovery) {
+                        let approval = result.unwrap_or_else(|e| {
+                            panic!(
+                                "expected {class:?}/{recovery:?} on {target:?} to authorise: {e:?}"
+                            )
+                        });
+                        assert_eq!(approval.target(), target);
+                        assert_eq!(approval.class(), class);
+                        assert_eq!(approval.recovery(), recovery);
+                    } else {
+                        assert_eq!(
+                            result,
+                            Err(WriteGateError::IncompatibleRecoveryClass),
+                            "expected {class:?}/{recovery:?} on {target:?} to be refused",
+                        );
+                    }
+                }
+                if expected_compatible(class, recovery) {
+                    accepted += 1;
+                } else {
+                    rejected += 1;
+                }
+            }
         }
+        assert_eq!(accepted, 5, "exactly five compatible pairs");
+        assert_eq!(rejected, 13, "exactly thirteen incompatible pairs");
+        assert_eq!(accepted + rejected, 18, "the matrix is exhaustive");
     }
 
     #[test]
@@ -325,15 +305,18 @@ mod tests {
         );
     }
 
+    /// `NoWrite` is refused as `NotAWrite` regardless of which recovery class accompanies
+    /// it, on both simulation targets — no recovery class can turn a read into a write.
     #[test]
-    fn a_non_write_cannot_be_authorised_as_a_write() {
-        assert_eq!(
-            authorize_write(
-                ExecutionTarget::Mock,
-                WriteCommandClass::NoWrite,
-                RecoveryClass::NotApplicableNoWrite,
-            ),
-            Err(WriteGateError::NotAWrite),
-        );
+    fn a_non_write_cannot_be_authorised_as_a_write_under_any_recovery_class() {
+        for recovery in ALL_RECOVERY_CLASSES {
+            for target in SIMULATION_TARGETS {
+                assert_eq!(
+                    authorize_write(target, WriteCommandClass::NoWrite, recovery),
+                    Err(WriteGateError::NotAWrite),
+                    "NoWrite with {recovery:?} on {target:?} must be NotAWrite",
+                );
+            }
+        }
     }
 }

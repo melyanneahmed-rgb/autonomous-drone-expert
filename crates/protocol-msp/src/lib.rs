@@ -153,6 +153,10 @@ pub enum MspError {
     /// A payload had bytes left over after every documented field was read. The M1 codec
     /// pins API 1.46 and refuses to silently ignore an undocumented tail.
     TrailingPayload { consumed: usize, total: usize },
+    /// A text field that feeds the device identity was not valid UTF-8. Rejected outright:
+    /// a lossy conversion could collapse two different byte sequences into the same string
+    /// and let two different devices compare as the same identity.
+    InvalidUtf8 { field: &'static str },
 }
 
 /// A decoded MSPv1 frame. The payload is retained as bytes; typed accessors interpret it.
@@ -322,12 +326,19 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
     }
 
-    /// A `u8` length prefix followed by that many bytes, interpreted as UTF-8 lossily so
-    /// arbitrary input never panics and no raw bytes leak through `Debug`.
-    fn length_prefixed_string(&mut self) -> Result<String, MspError> {
+    /// A `u8` length prefix followed by that many bytes, decoded as **strict** UTF-8.
+    ///
+    /// These strings feed the device identity, so a lossy decode is forbidden: it would map
+    /// distinct invalid byte sequences onto the same replacement-character string and two
+    /// different devices could then compare as the same identity. Invalid UTF-8 is rejected
+    /// with [`MspError::InvalidUtf8`] naming the field (never echoing the bytes).
+    fn length_prefixed_string(&mut self, field: &'static str) -> Result<String, MspError> {
         let len = self.u8()? as usize;
         let raw = self.take(len)?;
-        Ok(String::from_utf8_lossy(raw).into_owned())
+        match std::str::from_utf8(raw) {
+            Ok(text) => Ok(text.to_owned()),
+            Err(_) => Err(MspError::InvalidUtf8 { field }),
+        }
     }
 
     /// Assert the payload was fully consumed, rejecting any undocumented trailing bytes.
@@ -401,7 +412,9 @@ impl FcVariant {
         })
     }
 
-    /// The identifier as a lossy string, for display in reports. Never panics.
+    /// The identifier as a lossy string — a **presentation helper only**, for human-facing
+    /// reports. Identity comparison never uses this: it compares the raw `identifier` bytes,
+    /// so distinct byte sequences can never collapse into the same identity here.
     #[must_use]
     pub fn identifier_string(&self) -> String {
         String::from_utf8_lossy(&self.identifier).into_owned()
@@ -455,8 +468,9 @@ pub const SIGNATURE_LENGTH: usize = 32;
 ///
 /// The `signature` is parsed so the payload can be fully consumed, but it is a per-unit
 /// value: it is deliberately **not** propagated into any reconnection identity, backup or
-/// case record (see `ade-facts`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// case record (see `ade-facts`), and the manual [`core::fmt::Debug`] implementation redacts
+/// it so the bytes can never leak through logs or assertion messages.
+#[derive(Clone, PartialEq, Eq)]
 pub struct BoardInfo {
     /// Four-byte board identifier.
     pub board_identifier: [u8; 4],
@@ -488,6 +502,29 @@ pub struct BoardInfo {
     pub i2c_device_count: u8,
 }
 
+/// Manual `Debug`: every field except the per-unit `signature`, which is redacted. No byte,
+/// hex, base64 or hash representation of the signature is ever formatted.
+impl core::fmt::Debug for BoardInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BoardInfo")
+            .field("board_identifier", &self.board_identifier)
+            .field("hardware_revision", &self.hardware_revision)
+            .field("fc_type", &self.fc_type)
+            .field("target_capabilities", &self.target_capabilities)
+            .field("target_name", &self.target_name)
+            .field("board_name", &self.board_name)
+            .field("manufacturer_id", &self.manufacturer_id)
+            .field("signature", &"<redacted>")
+            .field("mcu_type_id", &self.mcu_type_id)
+            .field("configuration_state", &self.configuration_state)
+            .field("gyro_sample_rate_hz", &self.gyro_sample_rate_hz)
+            .field("configuration_problems", &self.configuration_problems)
+            .field("spi_device_count", &self.spi_device_count)
+            .field("i2c_device_count", &self.i2c_device_count)
+            .finish()
+    }
+}
+
 impl BoardInfo {
     /// Decode from a `MSP_BOARD_INFO` reply frame with a fully bounded parser that consumes
     /// the entire API 1.46 payload.
@@ -496,7 +533,9 @@ impl BoardInfo {
     /// - wrong command/direction;
     /// - [`MspError::FieldOverrun`] for any length prefix or fixed field that would read past
     ///   the frame (truncation);
-    /// - [`MspError::TrailingPayload`] if any byte remains after the last documented field.
+    /// - [`MspError::TrailingPayload`] if any byte remains after the last documented field;
+    /// - [`MspError::InvalidUtf8`] if a name field is not valid UTF-8 (these strings feed the
+    ///   device identity and are never decoded lossily).
     pub fn from_reply(frame: &Frame) -> Result<Self, MspError> {
         frame.expect(CommandId::BoardInfo, true)?;
         let mut r = Reader::new(frame.payload());
@@ -505,9 +544,9 @@ impl BoardInfo {
         let hardware_revision = r.u16_le()?;
         let fc_type = r.u8()?;
         let target_capabilities = r.u8()?;
-        let target_name = r.length_prefixed_string()?;
-        let board_name = r.length_prefixed_string()?;
-        let manufacturer_id = r.length_prefixed_string()?;
+        let target_name = r.length_prefixed_string("target_name")?;
+        let board_name = r.length_prefixed_string("board_name")?;
+        let manufacturer_id = r.length_prefixed_string("manufacturer_id")?;
         let sig = r.take(SIGNATURE_LENGTH)?;
         let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(sig);
@@ -880,6 +919,122 @@ mod tests {
             BoardInfo::from_reply(&frame),
             Err(MspError::FieldOverrun { .. })
         ));
+    }
+
+    #[test]
+    fn board_info_rejects_invalid_utf8_in_each_identity_string() {
+        // 0xFF is never valid UTF-8. Each name field is corrupted in turn.
+        let bad = [0xFFu8, 0x41];
+        let sig = [0u8; SIGNATURE_LENGTH];
+        let cases: [(&str, Vec<u8>); 3] = [
+            (
+                "target_name",
+                board_info_payload(
+                    b"S405", 0, 0, 0, &bad, b"BRD4", b"SPB", &sig, 0, 0, 0, 0, 0, 0,
+                ),
+            ),
+            (
+                "board_name",
+                board_info_payload(
+                    b"S405", 0, 0, 0, b"TGT4", &bad, b"SPB", &sig, 0, 0, 0, 0, 0, 0,
+                ),
+            ),
+            (
+                "manufacturer_id",
+                board_info_payload(
+                    b"S405", 0, 0, 0, b"TGT4", b"BRD4", &bad, &sig, 0, 0, 0, 0, 0, 0,
+                ),
+            ),
+        ];
+        for (field, payload) in cases {
+            let frame = decode_frame(&reply(CommandId::BoardInfo, &payload)).unwrap();
+            assert_eq!(
+                BoardInfo::from_reply(&frame),
+                Err(MspError::InvalidUtf8 { field }),
+                "invalid UTF-8 in {field} must be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn two_different_invalid_inputs_cannot_collapse_into_the_same_identity() {
+        // Under a lossy decode both of these distinct target_name byte sequences would
+        // become the same replacement-character string. Under the strict decode neither
+        // produces a BoardInfo at all, so no identity — let alone a shared one — can exist.
+        let sig = [0u8; SIGNATURE_LENGTH];
+        let first = board_info_payload(
+            b"S405",
+            0,
+            0,
+            0,
+            &[0xC3, 0x28],
+            b"BRD4",
+            b"SPB",
+            &sig,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        let second = board_info_payload(
+            b"S405",
+            0,
+            0,
+            0,
+            &[0xE2, 0x28],
+            b"BRD4",
+            b"SPB",
+            &sig,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        let a = BoardInfo::from_reply(&decode_frame(&reply(CommandId::BoardInfo, &first)).unwrap());
+        let b =
+            BoardInfo::from_reply(&decode_frame(&reply(CommandId::BoardInfo, &second)).unwrap());
+        assert_eq!(
+            a,
+            Err(MspError::InvalidUtf8 {
+                field: "target_name"
+            })
+        );
+        assert_eq!(
+            b,
+            Err(MspError::InvalidUtf8 {
+                field: "target_name"
+            })
+        );
+    }
+
+    #[test]
+    fn board_info_debug_redacts_the_signature() {
+        // A non-zero signature filled with a byte value that appears nowhere else.
+        let sig = [0xEEu8; SIGNATURE_LENGTH];
+        let payload = board_info_payload(
+            b"S405", 7, 2, 1, b"TGT4", b"BRD4", b"SPB", &sig, 3, 4, 5, 6, 7, 8,
+        );
+        let frame = decode_frame(&reply(CommandId::BoardInfo, &payload)).unwrap();
+        let board = BoardInfo::from_reply(&frame).unwrap();
+        let formatted = format!("{board:?}");
+        assert!(
+            formatted.contains("<redacted>"),
+            "Debug must carry the redaction marker",
+        );
+        // 0xEE is 238 decimal; neither the decimal nor a hex spelling may appear.
+        assert!(!formatted.contains("238"), "no signature byte in Debug");
+        assert!(
+            !formatted.to_lowercase().contains("0xee"),
+            "no hex signature byte in Debug"
+        );
+        assert!(!formatted.contains("ee, "), "no hex byte run in Debug");
+        // The other fields are still present.
+        assert!(formatted.contains("TGT4"));
+        assert!(formatted.contains("board_identifier"));
     }
 
     #[test]

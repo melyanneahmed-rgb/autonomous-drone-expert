@@ -10,8 +10,13 @@
 //! Two safety properties are structural:
 //! * every outbound frame passes through an [`AuditSink`] recording metadata only — never
 //!   the payload bytes;
-//! * while a session is [`Phase::Identifying`], any write command is refused
-//!   ([`TransportError::WriteDuringIdentify`]).
+//! * identification is **fail-closed**: while a session is [`Phase::Identifying`] only the
+//!   four identification reads (`MSP_API_VERSION`, `MSP_FC_VARIANT`, `MSP_FC_VERSION`,
+//!   `MSP_BOARD_INFO`) may reach the responder or transcript. A known write command is
+//!   refused with [`TransportError::WriteDuringIdentify`]; any other command — including a
+//!   snapshot read and any unknown command byte — is refused with
+//!   [`TransportError::CommandNotAllowedDuringIdentify`]. Every refusal is audited as
+//!   [`AuditDisposition::BlockedNotSent`], metadata only.
 
 use ade_protocol_msp::{CommandId, Direction, MspError, decode_frame};
 
@@ -34,6 +39,10 @@ pub enum TransportError {
     Malformed(MspError),
     /// A write command was attempted during identification.
     WriteDuringIdentify(u8),
+    /// A non-write command outside the identification allow-list (or an unknown command
+    /// byte) was attempted during identification. Identify is fail-closed: only the four
+    /// identification reads may reach the responder or transcript.
+    CommandNotAllowedDuringIdentify(u8),
     /// The transport was asked to send a frame the transcript did not expect.
     UnexpectedFrame,
     /// The transcript expected a different frame at this position (replies out of order).
@@ -44,10 +53,10 @@ pub enum TransportError {
     NotOpen,
 }
 
-/// The phase of a session, used to enforce zero writes during identification.
+/// The phase of a session, used to enforce the fail-closed identification allow-list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// Identity is being read; writes are forbidden.
+    /// Identity is being read; only the four identification reads are permitted.
     Identifying,
     /// Normal operation; writes are permitted (subject to the safety gate elsewhere).
     Operational,
@@ -60,6 +69,31 @@ pub fn is_write_command(command: CommandId) -> bool {
         command,
         CommandId::SetBeeperConfig | CommandId::EepromWrite | CommandId::Reboot
     )
+}
+
+/// Whether a command is one of the four identification reads permitted while identifying.
+#[must_use]
+pub fn is_identify_command(command: CommandId) -> bool {
+    matches!(
+        command,
+        CommandId::ApiVersion | CommandId::FcVariant | CommandId::FcVersion | CommandId::BoardInfo
+    )
+}
+
+/// The fail-closed identification guard: why a command byte must be refused during
+/// [`Phase::Identifying`], or `None` if it is one of the four identification reads.
+///
+/// Known write commands keep their dedicated [`TransportError::WriteDuringIdentify`]; every
+/// other command — including a snapshot read like `MSP_BEEPER_CONFIG` and any unknown
+/// command byte — is refused with [`TransportError::CommandNotAllowedDuringIdentify`].
+fn identify_refusal(command: u8) -> Option<TransportError> {
+    match CommandId::from_u8(command) {
+        Some(known) if is_identify_command(known) => None,
+        Some(known) if is_write_command(known) => {
+            Some(TransportError::WriteDuringIdentify(command))
+        }
+        _ => Some(TransportError::CommandNotAllowedDuringIdentify(command)),
+    }
 }
 
 /// Whether an audited frame was actually sent to the responder or blocked before sending.
@@ -200,15 +234,12 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
     fn guard_and_audit(&mut self, request: &[u8]) -> Result<(), TransportError> {
         let mut entry = audit_entry_for(request)?;
         if matches!(self.phase, Phase::Identifying) {
-            if let Some(command) = CommandId::from_u8(entry.command) {
-                if is_write_command(command) {
-                    // Record the blocked attempt as metadata only — the payload is never
-                    // logged and the responder is never called — then refuse the write.
-                    let command_byte = entry.command;
-                    entry.disposition = AuditDisposition::BlockedNotSent;
-                    self.audit.record(entry);
-                    return Err(TransportError::WriteDuringIdentify(command_byte));
-                }
+            if let Some(error) = identify_refusal(entry.command) {
+                // Record the blocked attempt as metadata only — the payload is never
+                // logged and the responder is never called — then refuse the frame.
+                entry.disposition = AuditDisposition::BlockedNotSent;
+                self.audit.record(entry);
+                return Err(error);
             }
         }
         self.audit.record(entry);
@@ -334,17 +365,14 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
         }
         let entry = audit_entry_for(request)?;
         if matches!(self.phase, Phase::Identifying) {
-            if let Some(command) = CommandId::from_u8(entry.command) {
-                if is_write_command(command) {
-                    // Record the blocked attempt (metadata only) before refusing, so the
-                    // audit log shows the attempt just as the mock transport does.
-                    let mut blocked = entry.clone();
-                    blocked.disposition = AuditDisposition::BlockedNotSent;
-                    self.audit.record(blocked);
-                    return Err(
-                        self.record_divergence(TransportError::WriteDuringIdentify(entry.command))
-                    );
-                }
+            if let Some(error) = identify_refusal(entry.command) {
+                // Record the blocked attempt (metadata only) before refusing, so the audit
+                // log shows the attempt just as the mock transport does. The transcript
+                // cursor is deliberately NOT advanced: the blocked frame never reached it.
+                let mut blocked = entry.clone();
+                blocked.disposition = AuditDisposition::BlockedNotSent;
+                self.audit.record(blocked);
+                return Err(self.record_divergence(error));
             }
         }
         if self.cursor >= self.steps.len() {
@@ -388,12 +416,35 @@ mod tests {
         }
     }
 
+    /// A responder that counts how many requests actually reached it.
+    struct CountingOk {
+        calls: usize,
+    }
+    impl FrameResponder for CountingOk {
+        fn respond(&mut self, _request: &[u8]) -> Result<Vec<u8>, TransportError> {
+            self.calls += 1;
+            Ok(encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap())
+        }
+    }
+
     fn read_frame() -> Vec<u8> {
         encode_frame(Direction::Request, CommandId::ApiVersion, &[]).unwrap()
     }
 
     fn write_frame() -> Vec<u8> {
         SetBeeperConfig::new(0x0001_0000).encode_request().unwrap()
+    }
+
+    fn request(command: CommandId) -> Vec<u8> {
+        encode_frame(Direction::Request, command, &[]).unwrap()
+    }
+
+    /// A checksum-valid request frame for a command byte this codec has no record of.
+    /// Built by hand, test-only: production code has no API for unknown commands.
+    fn unknown_command_frame() -> Vec<u8> {
+        const UNKNOWN: u8 = 200;
+        // `$ M < size=0 cmd checksum` with checksum = size ^ cmd = UNKNOWN.
+        vec![b'$', b'M', b'<', 0, UNKNOWN, UNKNOWN]
     }
 
     #[test]
@@ -482,5 +533,152 @@ mod tests {
         t.open().unwrap();
         assert_eq!(t.exchange(&read_frame()), Err(TransportError::Timeout));
         assert!(t.is_complete());
+    }
+
+    #[test]
+    fn all_four_identification_reads_pass_during_identify_on_mock() {
+        let mut t = MockTransport::new(CountingOk { calls: 0 }, InMemoryAudit::new());
+        t.open().unwrap();
+        for command in [
+            CommandId::ApiVersion,
+            CommandId::FcVariant,
+            CommandId::FcVersion,
+            CommandId::BoardInfo,
+        ] {
+            assert!(
+                t.exchange(&request(command)).is_ok(),
+                "{command:?} must be permitted during Identify",
+            );
+        }
+        assert_eq!(t.responder.calls, 4, "all four reads reached the responder");
+        assert!(
+            t.audit()
+                .entries()
+                .iter()
+                .all(|e| e.disposition == AuditDisposition::Sent)
+        );
+    }
+
+    #[test]
+    fn mock_identify_blocks_a_snapshot_read_without_calling_the_responder() {
+        let mut t = MockTransport::new(CountingOk { calls: 0 }, InMemoryAudit::new());
+        t.open().unwrap();
+        assert_eq!(
+            t.exchange(&request(CommandId::BeeperConfig)),
+            Err(TransportError::CommandNotAllowedDuringIdentify(
+                CommandId::BeeperConfig.as_u8()
+            )),
+        );
+        assert_eq!(
+            t.responder.calls, 0,
+            "the responder must never see the frame"
+        );
+        let entries = t.audit().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].disposition, AuditDisposition::BlockedNotSent);
+        assert_eq!(entries[0].command, CommandId::BeeperConfig.as_u8());
+
+        // Once operational the snapshot read is permitted and reaches the responder.
+        t.enter_operational();
+        assert!(t.exchange(&request(CommandId::BeeperConfig)).is_ok());
+        assert_eq!(t.responder.calls, 1);
+        assert_eq!(
+            t.audit().entries().last().unwrap().disposition,
+            AuditDisposition::Sent
+        );
+    }
+
+    #[test]
+    fn mock_identify_blocks_an_unknown_command_byte() {
+        let mut t = MockTransport::new(CountingOk { calls: 0 }, InMemoryAudit::new());
+        t.open().unwrap();
+        assert_eq!(
+            t.exchange(&unknown_command_frame()),
+            Err(TransportError::CommandNotAllowedDuringIdentify(200)),
+        );
+        assert_eq!(t.responder.calls, 0);
+        let entries = t.audit().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].disposition, AuditDisposition::BlockedNotSent);
+        assert_eq!(entries[0].command, 200);
+        assert_eq!(entries[0].payload_len, 0);
+    }
+
+    #[test]
+    fn replay_identify_blocks_disallowed_commands_without_moving_the_cursor() {
+        let beeper_read = request(CommandId::BeeperConfig);
+        let steps = vec![ReplayStep {
+            expected_request: beeper_read.clone(),
+            response: ReplayResponse::Reply(vec![]),
+        }];
+        let mut t = ReplayTransport::new(steps, InMemoryAudit::new());
+        t.open().unwrap();
+
+        // A snapshot read during Identify is refused even though it is the transcript's
+        // next expected frame — the guard fires before the transcript is consulted.
+        assert_eq!(
+            t.exchange(&beeper_read),
+            Err(TransportError::CommandNotAllowedDuringIdentify(
+                CommandId::BeeperConfig.as_u8()
+            )),
+        );
+        // An unknown command byte is refused the same way.
+        assert_eq!(
+            t.exchange(&unknown_command_frame()),
+            Err(TransportError::CommandNotAllowedDuringIdentify(200)),
+        );
+        // Both attempts were audited as blocked; the cursor never advanced.
+        let entries = t.audit().entries();
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.disposition == AuditDisposition::BlockedNotSent)
+        );
+        assert!(!t.is_complete(), "the transcript cursor must not advance");
+        assert_eq!(
+            t.divergence().unwrap().kind,
+            TransportError::CommandNotAllowedDuringIdentify(CommandId::BeeperConfig.as_u8()),
+        );
+
+        // After identification the same snapshot read is served by the transcript — proving
+        // the cursor still points at the first (and only) step.
+        t.enter_operational();
+        assert!(t.exchange(&beeper_read).is_ok());
+        assert!(t.is_complete());
+        assert_eq!(
+            t.audit().entries().last().unwrap().disposition,
+            AuditDisposition::Sent
+        );
+    }
+
+    #[test]
+    fn replay_identify_permits_the_four_identification_reads() {
+        let steps = [
+            CommandId::ApiVersion,
+            CommandId::FcVariant,
+            CommandId::FcVersion,
+            CommandId::BoardInfo,
+        ]
+        .map(|command| ReplayStep {
+            expected_request: request(command),
+            response: ReplayResponse::Reply(vec![]),
+        })
+        .to_vec();
+        let mut t = ReplayTransport::new(steps, InMemoryAudit::new());
+        t.open().unwrap();
+        for command in [
+            CommandId::ApiVersion,
+            CommandId::FcVariant,
+            CommandId::FcVersion,
+            CommandId::BoardInfo,
+        ] {
+            assert!(
+                t.exchange(&request(command)).is_ok(),
+                "{command:?} must be permitted during Identify",
+            );
+        }
+        assert!(t.is_complete());
+        assert!(t.divergence().is_none());
     }
 }
