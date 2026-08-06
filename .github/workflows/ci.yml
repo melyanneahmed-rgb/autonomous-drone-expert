@@ -1,5 +1,5 @@
 # Foundation CI.
-# Repository Actions policy intentionally allow-lists actions/checkout@v7.0.1.
+# Repository Actions policy intentionally allow-lists actions/checkout@v7.0.1 only.
 #
 # Scope note (honesty): these gates cover only what this repository actually contains
 # today -- a structural workspace with zero dependencies, documentation, provenance
