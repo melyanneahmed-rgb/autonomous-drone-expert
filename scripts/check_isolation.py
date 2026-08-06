@@ -11,6 +11,7 @@ Standard library only. No production dependency is introduced by this script.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -21,13 +22,15 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Dependency policy (ADR-0009). The foundation batch's absolute "zero dependencies" rule is
 # replaced by a precise one: the ONLY dependencies permitted are first-party PATH
-# dependencies onto crates that are members of THIS workspace. Everything else -- a registry
-# version, a git URL, a wildcard, a path escaping the repository, a path that is not a real
-# workspace member, a workspace-inherited dependency, or an alias hiding a different package
-# -- is rejected. EXTERNAL PRODUCTION DEPENDENCIES REMAIN PROHIBITED; their supply-chain
-# audit is enforced separately by cargo-deny. Relaxing this to admit an external source is a
-# new Dependency Audit and its own reviewed pull request, never a quiet edit.
-ALLOW_ONLY_WORKSPACE_PATH_DEPENDENCIES = True
+# dependencies onto crates that are ACTUAL members of THIS workspace. Everything else -- a
+# registry version, a git URL, a wildcard, a path escaping the repository, a path that is not
+# a real workspace member, a workspace-inherited dependency, or an alias hiding a different
+# package -- is rejected. EXTERNAL PRODUCTION DEPENDENCIES REMAIN PROHIBITED; their
+# supply-chain audit is enforced separately by cargo-deny. Relaxing this to admit an external
+# source is a new Dependency Audit and its own reviewed pull request, never a quiet edit.
+#
+# "Actual member" is decided by Cargo itself via `cargo metadata` (below), so that
+# `workspace.exclude` is honoured -- a `workspace.members` glob match is NOT membership.
 
 ALLOWED_REMOTES = {"origin"}
 
@@ -141,26 +144,58 @@ def _iter_dependency_tables(manifest: dict):
                 yield f"target.{key}", target[key]
 
 
-def load_workspace_members(root: Path = ROOT) -> list[str]:
-    """The `workspace.members` globs declared by the root manifest (empty on failure)."""
+def resolve_workspace_member_dirs(root: Path = ROOT) -> set[Path] | None:
+    """The resolved directories of the ACTUAL workspace members, per Cargo.
+
+    Uses `cargo metadata --no-deps --offline` so that both `workspace.members` **and**
+    `workspace.exclude` are applied exactly as Cargo resolves them -- a glob match alone is
+    not membership. `--no-deps --offline` performs no network access and lists only the
+    workspace's own member packages.
+
+    Returns None on ANY failure (cargo missing, non-zero exit, unparseable output, a package
+    without a manifest path). Callers MUST treat None as **fail-closed** -- refuse the path
+    dependency -- never as "the workspace has no members".
+    """
     try:
-        manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return []
-    members = manifest.get("workspace", {}).get("members", [])
-    return [glob for glob in members if isinstance(glob, str)]
+        result = subprocess.run(
+            [
+                "cargo",
+                "metadata",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--offline",
+                "--manifest-path",
+                str(root / "Cargo.toml"),
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    packages = data.get("packages")
+    if not isinstance(packages, list):
+        return None
+    dirs: set[Path] = set()
+    for package in packages:
+        manifest_path = package.get("manifest_path")
+        if not isinstance(manifest_path, str):
+            return None
+        dirs.add(Path(manifest_path).resolve().parent)
+    return dirs
 
 
-def is_workspace_member(resolved_dir: Path, root: Path, member_globs: list[str]) -> bool:
-    """True when `resolved_dir` is a member crate of this workspace holding a package."""
-    try:
-        rel = resolved_dir.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    rel_posix = PurePosixPath(rel.as_posix())
-    if not any(rel_posix.match(glob) for glob in member_globs):
-        return False
-    return (resolved_dir / "Cargo.toml").is_file()
+def is_workspace_member(resolved_dir: Path, member_dirs: set[Path]) -> bool:
+    """True when `resolved_dir` is one of the actual member directories (cargo metadata)."""
+    return resolved_dir.resolve() in member_dirs
 
 
 def read_package_name(cargo_toml: Path) -> str | None:
@@ -181,18 +216,21 @@ def classify_dependency(
     spec,
     manifest_path: Path,
     root: Path = ROOT,
-    member_globs: list[str] | None = None,
+    member_dirs: set[Path] | None = None,
 ) -> str | None:
     """Return an error message if `spec` violates the policy, else None.
 
-    The only accepted form is a path dependency onto a crate that is a member of this
-    workspace, whose real package name matches the declaration (allowing an explicit
-    ``package = "…"`` rename). Registry versions, git sources, wildcards, hybrids,
-    workspace-inherited deps, escaping paths and non-member paths are all rejected. Path
-    containment is checked structurally (resolve + relative_to), never by string prefix.
+    The only accepted form is a path dependency onto a crate that is an ACTUAL member of
+    this workspace (per `cargo metadata`, so `workspace.exclude` is honoured), whose real
+    package name matches the declaration (allowing an explicit ``package = "…"`` rename).
+    Registry versions, git sources, wildcards, hybrids, workspace-inherited deps, escaping
+    paths and non-member paths are all rejected. Path containment is checked structurally
+    (resolve + relative_to), never by string prefix.
+
+    `member_dirs` is the set of resolved member directories from
+    [`resolve_workspace_member_dirs`]; None means membership could not be determined, and any
+    path dependency is then refused **fail-closed**.
     """
-    if member_globs is None:
-        member_globs = load_workspace_members(root)
     prefix = f"{manifest_path.relative_to(root)}: dependency '{dep_name}'"
 
     if isinstance(spec, str):
@@ -233,11 +271,17 @@ def classify_dependency(
     if path_escapes_repository(manifest_path, dep_path, root):
         return f"{prefix} has a path escaping the repository ({dep_path})."
 
-    resolved = (manifest_path.parent / dep_path).resolve()
-    if not is_workspace_member(resolved, root, member_globs):
+    if member_dirs is None:
         return (
-            f"{prefix} path '{dep_path}' is not a member crate of this workspace. Only "
-            "workspace members may be depended upon (ADR-0009)."
+            f"{prefix} is a path dependency but workspace membership could not be "
+            "determined (cargo metadata failed). Refusing it, fail-closed (ADR-0009)."
+        )
+    resolved = (manifest_path.parent / dep_path).resolve()
+    if not is_workspace_member(resolved, member_dirs):
+        return (
+            f"{prefix} path '{dep_path}' is not an actual member of this workspace (check "
+            "workspace.members and workspace.exclude). Only workspace members may be "
+            "depended upon (ADR-0009)."
         )
 
     actual = read_package_name(resolved / "Cargo.toml")
@@ -253,7 +297,8 @@ def classify_dependency(
 
 
 def check_cargo_manifests(files: list[Path]) -> None:
-    member_globs = load_workspace_members(ROOT)
+    manifests: list[tuple[Path, dict]] = []
+    any_path_dependency = False
     for path in files:
         if path.name != "Cargo.toml":
             continue
@@ -263,9 +308,22 @@ def check_cargo_manifests(files: list[Path]) -> None:
         except tomllib.TOMLDecodeError as exc:
             fail(f"{rel}: malformed Cargo.toml ({exc}).")
             continue
+        manifests.append((path, manifest))
+        for _table_name, table in _iter_dependency_tables(manifest):
+            for _name, spec in (table or {}).items():
+                if isinstance(spec, dict) and isinstance(spec.get("path"), str):
+                    any_path_dependency = True
+
+    # Determine actual membership from Cargo ONLY when a path dependency exists. With none
+    # (the current state), cargo is never invoked and the gate stays dependency-free. When a
+    # path dependency does exist and membership cannot be resolved, member_dirs is None and
+    # every path dependency is refused fail-closed by classify_dependency.
+    member_dirs = resolve_workspace_member_dirs(ROOT) if any_path_dependency else set()
+
+    for path, manifest in manifests:
         for _table_name, table in _iter_dependency_tables(manifest):
             for name, spec in (table or {}).items():
-                message = classify_dependency(name, spec, path, ROOT, member_globs)
+                message = classify_dependency(name, spec, path, ROOT, member_dirs)
                 if message:
                     fail(message)
 
