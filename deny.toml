@@ -44,7 +44,13 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
+# Wildcard VERSION requirements remain denied for any registry dependency. First-party
+# workspace path dependencies carry no version by design (ADR-0009 forbids a path+version
+# hybrid), so cargo-deny would otherwise read them as wildcards. allow-wildcard-paths
+# permits a wildcard ONLY for path dependencies -- it does not relax the ban for external
+# registry dependencies, which remain prohibited.
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

@@ -6,5 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
-# No dependencies. Adding one requires its own reviewed pull request.
+# First-party workspace path dependencies only (ADR-0009).
 [dependencies]
+ade-protocol-msp = { path = "../protocol-msp" }
+ade-facts = { path = "../facts" }
+ade-safety = { path = "../safety" }
+ade-transport = { path = "../transport" }
