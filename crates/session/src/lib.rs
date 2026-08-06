@@ -6,6 +6,12 @@
 //! named state; there is **no** implicit "ready" or "success" — readiness is only ever
 //! [`SessionState::CompletedVerified`], reached after verification, and an unprovable outcome
 //! is [`SessionState::StateUnknownRecoveryRequired`], never a silent pass.
+//!
+//! Command authority is expressed per [`WriteCommandClass`] (from `ade-safety`) rather than a
+//! single "writes permitted" flag: each state permits only the specific classes that are
+//! legitimate in it (see [`SessionState::permits_command_class`]).
+
+use ade_safety::WriteCommandClass;
 
 /// The states of the M1 lifecycle. Ordering is documentation only; transitions are governed
 /// by [`SessionState::may_transition_to`].
@@ -48,17 +54,47 @@ pub enum SessionState {
 }
 
 impl SessionState {
-    /// Whether a write command may be issued in this state. Only false during identification
-    /// (and the disconnected/connecting states), enforcing "zero writes during Identify".
+    /// Whether a command of the given [`WriteCommandClass`] may be issued in this state.
+    ///
+    /// This is the single command-authority contract for the lifecycle. It is deliberately a
+    /// strict allow-list per class — every combination not named below is refused:
+    ///
+    /// * `NoWrite` (reads/identify and other bounded I/O) is permitted only where the
+    ///   lifecycle actually talks to the device to make progress: `Identifying`,
+    ///   `SnapshotRead`, `ApplyingTransient`, `TransientWritePendingReconcileOnResume`,
+    ///   `Verifying`, and `Recovering`. It is **not** permitted in the local-only states
+    ///   `Planning`, `AwaitingApproval` or `BackingUp` (no arbitrary device I/O there), nor
+    ///   in `Disconnected`/`Connecting`, nor in any terminal state.
+    /// * `TransientConfig` (RAM-only write) is permitted only in `ApplyingTransient` and
+    ///   `Recovering`.
+    /// * `PersistentConfig` (EEPROM commit) is permitted only in `Saving` and `Recovering`.
+    /// * `Reboot` is permitted only in `Rebooting` and `Recovering`.
+    ///
+    /// In particular no write and no reboot is ever permitted in `Planning`,
+    /// `AwaitingApproval`, `BackingUp`, `CompletedVerified`, `CompletedRestored` or
+    /// `StateUnknownRecoveryRequired`.
     #[must_use]
-    pub const fn writes_permitted(self) -> bool {
-        !matches!(
-            self,
-            SessionState::Disconnected
-                | SessionState::Connecting
-                | SessionState::Identifying
-                | SessionState::SnapshotRead
-        )
+    pub const fn permits_command_class(self, class: WriteCommandClass) -> bool {
+        use SessionState::{
+            ApplyingTransient, Identifying, Rebooting, Recovering, Saving, SnapshotRead,
+            TransientWritePendingReconcileOnResume, Verifying,
+        };
+        match class {
+            WriteCommandClass::NoWrite => matches!(
+                self,
+                Identifying
+                    | SnapshotRead
+                    | ApplyingTransient
+                    | TransientWritePendingReconcileOnResume
+                    | Verifying
+                    | Recovering
+            ),
+            WriteCommandClass::TransientConfig => {
+                matches!(self, ApplyingTransient | Recovering)
+            }
+            WriteCommandClass::PersistentConfig => matches!(self, Saving | Recovering),
+            WriteCommandClass::Reboot => matches!(self, Rebooting | Recovering),
+        }
     }
 
     /// Whether this is a terminal state.
@@ -188,11 +224,118 @@ pub struct InvalidTransition {
 mod tests {
     use super::*;
 
+    const ALL_STATES: [SessionState; 17] = [
+        SessionState::Disconnected,
+        SessionState::Connecting,
+        SessionState::Identifying,
+        SessionState::SnapshotRead,
+        SessionState::Planning,
+        SessionState::AwaitingApproval,
+        SessionState::BackingUp,
+        SessionState::ApplyingTransient,
+        SessionState::TransientWritePendingReconcileOnResume,
+        SessionState::Saving,
+        SessionState::Rebooting,
+        SessionState::Reconnecting,
+        SessionState::Verifying,
+        SessionState::Recovering,
+        SessionState::CompletedVerified,
+        SessionState::CompletedRestored,
+        SessionState::StateUnknownRecoveryRequired,
+    ];
+
+    const ALL_CLASSES: [WriteCommandClass; 4] = [
+        WriteCommandClass::NoWrite,
+        WriteCommandClass::TransientConfig,
+        WriteCommandClass::PersistentConfig,
+        WriteCommandClass::Reboot,
+    ];
+
+    /// The authoritative allow-list, kept independent of the implementation so the table test
+    /// checks intent rather than restating the same `match`.
+    fn expected_permission(state: SessionState, class: WriteCommandClass) -> bool {
+        use SessionState::{
+            ApplyingTransient, Identifying, Rebooting, Recovering, Saving, SnapshotRead,
+            TransientWritePendingReconcileOnResume, Verifying,
+        };
+        match class {
+            WriteCommandClass::NoWrite => matches!(
+                state,
+                Identifying
+                    | SnapshotRead
+                    | ApplyingTransient
+                    | TransientWritePendingReconcileOnResume
+                    | Verifying
+                    | Recovering
+            ),
+            WriteCommandClass::TransientConfig => matches!(state, ApplyingTransient | Recovering),
+            WriteCommandClass::PersistentConfig => matches!(state, Saving | Recovering),
+            WriteCommandClass::Reboot => matches!(state, Rebooting | Recovering),
+        }
+    }
+
+    #[test]
+    fn command_authority_matches_the_full_state_by_class_matrix() {
+        for state in ALL_STATES {
+            for class in ALL_CLASSES {
+                assert_eq!(
+                    state.permits_command_class(class),
+                    expected_permission(state, class),
+                    "state {state:?} class {class:?}",
+                );
+            }
+        }
+    }
+
     #[test]
     fn no_writes_are_permitted_during_identification() {
-        assert!(!SessionState::Identifying.writes_permitted());
-        assert!(!SessionState::SnapshotRead.writes_permitted());
-        assert!(SessionState::ApplyingTransient.writes_permitted());
+        for class in ALL_CLASSES {
+            assert!(
+                !SessionState::Identifying.permits_command_class(class)
+                    || class == WriteCommandClass::NoWrite
+            );
+        }
+        // Identify permits reads only, never any write or reboot.
+        assert!(SessionState::Identifying.permits_command_class(WriteCommandClass::NoWrite));
+        assert!(
+            !SessionState::Identifying.permits_command_class(WriteCommandClass::TransientConfig)
+        );
+        assert!(
+            !SessionState::Identifying.permits_command_class(WriteCommandClass::PersistentConfig)
+        );
+        assert!(!SessionState::Identifying.permits_command_class(WriteCommandClass::Reboot));
+        assert!(SessionState::SnapshotRead.permits_command_class(WriteCommandClass::NoWrite));
+        assert!(
+            !SessionState::SnapshotRead.permits_command_class(WriteCommandClass::TransientConfig)
+        );
+    }
+
+    #[test]
+    fn local_and_terminal_states_permit_no_write_or_reboot() {
+        let writes_and_reboot = [
+            WriteCommandClass::TransientConfig,
+            WriteCommandClass::PersistentConfig,
+            WriteCommandClass::Reboot,
+        ];
+        for state in [
+            SessionState::Planning,
+            SessionState::AwaitingApproval,
+            SessionState::BackingUp,
+            SessionState::CompletedVerified,
+            SessionState::CompletedRestored,
+            SessionState::StateUnknownRecoveryRequired,
+        ] {
+            for class in ALL_CLASSES {
+                assert!(
+                    !state.permits_command_class(class),
+                    "no command class may run in {state:?}",
+                );
+            }
+            // Redundant but explicit: certainly no write and no reboot.
+            for class in writes_and_reboot {
+                assert!(!state.permits_command_class(class));
+            }
+        }
     }
 
     #[test]

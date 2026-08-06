@@ -62,6 +62,16 @@ pub fn is_write_command(command: CommandId) -> bool {
     )
 }
 
+/// Whether an audited frame was actually sent to the responder or blocked before sending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditDisposition {
+    /// The frame passed the guard and was handed to the responder.
+    Sent,
+    /// The frame was refused by a guard (e.g. a write during identification) and never sent.
+    /// Its metadata is still recorded so the log distinguishes an attempt from a real send.
+    BlockedNotSent,
+}
+
 /// One audited outbound frame: metadata only, never the payload content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditEntry {
@@ -73,6 +83,8 @@ pub struct AuditEntry {
     pub payload_len: usize,
     /// The frame checksum byte.
     pub checksum: u8,
+    /// Whether the frame was sent or blocked before sending.
+    pub disposition: AuditDisposition,
 }
 
 /// A sink that records outbound frame metadata for the case log.
@@ -107,7 +119,9 @@ impl AuditSink for InMemoryAudit {
     }
 }
 
-/// Derive an [`AuditEntry`] from a raw outbound frame (metadata only).
+/// Derive an [`AuditEntry`] from a raw outbound frame (metadata only). The entry defaults to
+/// [`AuditDisposition::Sent`]; a guard that refuses the frame overrides it to
+/// [`AuditDisposition::BlockedNotSent`] before recording.
 ///
 /// # Errors
 /// [`TransportError::Malformed`] if the frame does not decode.
@@ -120,6 +134,7 @@ pub fn audit_entry_for(frame: &[u8]) -> Result<AuditEntry, TransportError> {
         checksum: *frame
             .last()
             .expect("a decoded frame has at least the checksum byte"),
+        disposition: AuditDisposition::Sent,
     })
 }
 
@@ -183,11 +198,16 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
     }
 
     fn guard_and_audit(&mut self, request: &[u8]) -> Result<(), TransportError> {
-        let entry = audit_entry_for(request)?;
+        let mut entry = audit_entry_for(request)?;
         if matches!(self.phase, Phase::Identifying) {
             if let Some(command) = CommandId::from_u8(entry.command) {
                 if is_write_command(command) {
-                    return Err(TransportError::WriteDuringIdentify(entry.command));
+                    // Record the blocked attempt as metadata only — the payload is never
+                    // logged and the responder is never called — then refuse the write.
+                    let command_byte = entry.command;
+                    entry.disposition = AuditDisposition::BlockedNotSent;
+                    self.audit.record(entry);
+                    return Err(TransportError::WriteDuringIdentify(command_byte));
                 }
             }
         }
@@ -316,6 +336,11 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
         if matches!(self.phase, Phase::Identifying) {
             if let Some(command) = CommandId::from_u8(entry.command) {
                 if is_write_command(command) {
+                    // Record the blocked attempt (metadata only) before refusing, so the
+                    // audit log shows the attempt just as the mock transport does.
+                    let mut blocked = entry.clone();
+                    blocked.disposition = AuditDisposition::BlockedNotSent;
+                    self.audit.record(blocked);
                     return Err(
                         self.record_divergence(TransportError::WriteDuringIdentify(entry.command))
                     );
@@ -380,10 +405,11 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].command, CommandId::ApiVersion.as_u8());
         assert_eq!(entries[0].payload_len, 0);
+        assert_eq!(entries[0].disposition, AuditDisposition::Sent);
     }
 
     #[test]
-    fn writes_are_refused_during_identification() {
+    fn a_write_blocked_during_identification_is_audited_as_blocked_not_sent() {
         let mut t = MockTransport::new(EchoOk, InMemoryAudit::new());
         t.open().unwrap();
         assert_eq!(
@@ -392,10 +418,21 @@ mod tests {
                 CommandId::SetBeeperConfig.as_u8()
             )),
         );
-        // The refused write is not recorded in the audit log.
-        assert!(t.audit().entries().is_empty());
+        // The refused write IS recorded — as a blocked attempt, metadata only, never sent.
+        let entries = t.audit().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].disposition, AuditDisposition::BlockedNotSent);
+        assert_eq!(entries[0].command, CommandId::SetBeeperConfig.as_u8());
+        assert_eq!(entries[0].direction, Direction::Request);
+
+        // Once operational, the same write goes through and is audited as Sent — the log now
+        // distinguishes the blocked attempt from the real send.
         t.enter_operational();
         assert!(t.exchange(&write_frame()).is_ok());
+        let entries = t.audit().entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].disposition, AuditDisposition::Sent);
+        assert_eq!(entries[0].disposition, AuditDisposition::BlockedNotSent);
     }
 
     #[test]

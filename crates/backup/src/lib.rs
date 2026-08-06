@@ -114,6 +114,13 @@ mod tests {
                 patch: 5,
             },
             board_identifier: *b"S405",
+            hardware_revision: 0,
+            fc_type: 0,
+            target_capabilities: 0,
+            target_name: "SPEEDYBEEF405V4".to_string(),
+            board_name: "SpeedyBee F405 V4".to_string(),
+            manufacturer_id: "SPB".to_string(),
+            mcu_type_id: 0x1B,
         }
     }
 

@@ -91,7 +91,16 @@ impl MockFc {
         let manufacturer = b"SPB";
         out.push(manufacturer.len() as u8);
         out.extend_from_slice(manufacturer);
-        out.extend_from_slice(&[0u8; 32]); // signature
+        // A zero signature: the mock never fabricates a per-unit signature, and downstream
+        // identity never depends on it.
+        out.extend_from_slice(&[0u8; 32]);
+        // Complete API 1.46 tail so the parser consumes the whole payload (no silent tail):
+        out.push(0); // mcu_type_id
+        out.push(0); // configuration_state
+        out.extend_from_slice(&0u16.to_le_bytes()); // gyro_sample_rate_hz
+        out.extend_from_slice(&0u32.to_le_bytes()); // configuration_problems
+        out.push(0); // spi_device_count
+        out.push(0); // i2c_device_count
         out
     }
 
@@ -104,9 +113,15 @@ impl MockFc {
     }
 
     fn handle(&mut self, frame: &Frame) -> Result<Vec<u8>, TransportError> {
+        // The mock only ever processes host *requests*. A reply/error frame arriving as a
+        // "request" is a protocol violation and is refused before any state is examined.
+        if frame.direction != Direction::Request {
+            return Err(TransportError::UnexpectedFrame);
+        }
         let Some(command) = frame.known_command() else {
             return Err(TransportError::UnexpectedFrame);
         };
+        let payload = frame.payload();
         match command {
             CommandId::ApiVersion => Self::reply(command, &[self.api.0, self.api.1, self.api.2]),
             CommandId::FcVariant => Self::reply(command, &self.variant),
@@ -117,23 +132,23 @@ impl MockFc {
             CommandId::BoardInfo => Self::reply(command, &self.board_info_payload()),
             CommandId::BeeperConfig => Self::reply(command, &self.ram.to_reply_payload()),
             CommandId::SetBeeperConfig => {
-                let payload = frame.payload();
-                // Mirror the recorded 4-byte-safe write: beeper_off_flags is updated; the
-                // DShot beacon fields are touched only if extra bytes are present.
-                if payload.len() >= 4 {
-                    self.ram.beeper_off_flags =
-                        u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                // The M1 write is EXACTLY four bytes — `beeper_off_flags` only. Any other
+                // length is a protocol violation: it is NACKed with an MSP error reply and
+                // RAM is left untouched. The DShot beacon fields are NEVER written on this
+                // path, so a longer frame can never smuggle in a DShot change.
+                if payload.len() != 4 {
+                    return Self::error_reply(command);
                 }
-                if payload.len() >= 5 {
-                    self.ram.dshot_beacon_tone = payload[4];
-                }
-                if payload.len() >= 9 {
-                    self.ram.dshot_beacon_off_flags =
-                        u32::from_le_bytes([payload[5], payload[6], payload[7], payload[8]]);
-                }
+                self.ram.beeper_off_flags =
+                    u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 Self::reply(command, &[])
             }
             CommandId::EepromWrite => {
+                // An EEPROM write carries no payload; anything else is refused without a
+                // commit. A refused frame never changes EEPROM.
+                if !payload.is_empty() {
+                    return Self::error_reply(command);
+                }
                 if self.armed {
                     return Self::error_reply(command);
                 }
@@ -141,11 +156,16 @@ impl MockFc {
                 Self::reply(command, &[])
             }
             CommandId::Reboot => {
-                let mode = frame.payload().first().copied().unwrap_or(0);
+                // A normal reboot carries no payload. Any payload is refused rather than
+                // silently accepting a stray reboot-mode byte, and a refused reboot changes
+                // neither RAM nor the reboot generation.
+                if !payload.is_empty() {
+                    return Self::error_reply(command);
+                }
                 self.reboot_generation += 1;
                 // RAM is reloaded from EEPROM: an unsaved transient write is lost.
                 self.ram = self.eeprom.clone();
-                Self::reply(command, &[mode])
+                Self::reply(command, &[])
             }
         }
     }
@@ -251,5 +271,111 @@ mod tests {
         let reply = fc.respond(&read(CommandId::EepromWrite)).unwrap();
         let frame = decode_frame(&reply).unwrap();
         assert_eq!(frame.direction, Direction::Error);
+    }
+
+    /// A frame whose direction is not `Request` is refused outright.
+    #[test]
+    fn a_non_request_frame_is_refused() {
+        let mut fc = MockFc::new(snapshot(0));
+        let reply_frame =
+            encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap();
+        assert_eq!(
+            fc.respond(&reply_frame),
+            Err(TransportError::UnexpectedFrame)
+        );
+        let error_frame = encode_frame(Direction::Error, CommandId::ApiVersion, &[]).unwrap();
+        assert_eq!(
+            fc.respond(&error_frame),
+            Err(TransportError::UnexpectedFrame)
+        );
+    }
+
+    fn assert_error_reply(reply: &[u8], command: CommandId) {
+        let frame = decode_frame(reply).unwrap();
+        assert_eq!(frame.direction, Direction::Error);
+        assert_eq!(frame.known_command(), Some(command));
+    }
+
+    /// Every `MSP_SET_BEEPER_CONFIG` payload length other than exactly four is NACKed, and
+    /// RAM — including the DShot beacon fields — is unchanged after each rejected request.
+    #[test]
+    fn set_beeper_config_of_any_non_four_length_is_refused_and_ram_is_unchanged() {
+        let mut fc = MockFc::new(snapshot(0xAA));
+        let before = fc.ram().clone();
+        for len in [0usize, 1, 2, 3, 5, 8, 9, 10] {
+            let frame = encode_frame(
+                Direction::Request,
+                CommandId::SetBeeperConfig,
+                &vec![0x55u8; len],
+            )
+            .unwrap();
+            let reply = fc.respond(&frame).unwrap();
+            assert_error_reply(&reply, CommandId::SetBeeperConfig);
+            assert_eq!(
+                fc.ram(),
+                &before,
+                "RAM changed after a rejected len {len} write"
+            );
+            // DShot beacon fields, specifically, are never touched.
+            assert_eq!(fc.ram().dshot_beacon_tone, before.dshot_beacon_tone);
+            assert_eq!(
+                fc.ram().dshot_beacon_off_flags,
+                before.dshot_beacon_off_flags
+            );
+        }
+        // The exactly-four-byte write still works and touches only beeper_off_flags.
+        let ok = SetBeeperConfig::new(SYSTEM_INIT_OFF_MASK)
+            .encode_request()
+            .unwrap();
+        fc.respond(&ok).unwrap();
+        assert_eq!(fc.ram().beeper_off_flags, SYSTEM_INIT_OFF_MASK);
+        assert_eq!(fc.ram().dshot_beacon_tone, before.dshot_beacon_tone);
+        assert_eq!(
+            fc.ram().dshot_beacon_off_flags,
+            before.dshot_beacon_off_flags
+        );
+    }
+
+    /// An `MSP_EEPROM_WRITE` with any payload is refused and EEPROM is not committed.
+    #[test]
+    fn eeprom_write_with_a_payload_is_refused_and_eeprom_is_unchanged() {
+        let mut fc = MockFc::new(snapshot(0));
+        // Make RAM differ from EEPROM so a wrongful commit would be observable.
+        fc.respond(
+            &SetBeeperConfig::new(SYSTEM_INIT_OFF_MASK)
+                .encode_request()
+                .unwrap(),
+        )
+        .unwrap();
+        let eeprom_before = fc.eeprom().clone();
+        let frame = encode_frame(Direction::Request, CommandId::EepromWrite, &[0x01]).unwrap();
+        let reply = fc.respond(&frame).unwrap();
+        assert_error_reply(&reply, CommandId::EepromWrite);
+        assert_eq!(fc.eeprom(), &eeprom_before, "EEPROM must not be committed");
+    }
+
+    /// An `MSP_REBOOT` with any payload is refused and neither RAM nor the reboot generation
+    /// changes.
+    #[test]
+    fn reboot_with_a_payload_is_refused_and_nothing_changes() {
+        let mut fc = MockFc::new(snapshot(0));
+        // A pending transient write that a wrongful reboot would discard.
+        fc.respond(
+            &SetBeeperConfig::new(SYSTEM_INIT_OFF_MASK)
+                .encode_request()
+                .unwrap(),
+        )
+        .unwrap();
+        let ram_before = fc.ram().clone();
+        let gen_before = fc.reboot_generation();
+        let frame = encode_frame(Direction::Request, CommandId::Reboot, &[0x00]).unwrap();
+        let reply = fc.respond(&frame).unwrap();
+        assert_error_reply(&reply, CommandId::Reboot);
+        assert_eq!(
+            fc.ram(),
+            &ram_before,
+            "RAM must be untouched by a rejected reboot"
+        );
+        assert_eq!(fc.reboot_generation(), gen_before);
     }
 }

@@ -67,8 +67,11 @@ pub const HARDWARE_WRITE_GATE_NOT_APPROVED: &str = "HARDWARE_WRITE_GATE_NOT_APPR
 pub enum WriteGateError {
     /// The hardware-write gate is not approved in M1. Carries the stable marker.
     HardwareGateNotApproved(&'static str),
-    /// A write class was declared with no recovery class (or vice versa).
-    MissingRecoveryClass,
+    /// The declared recovery class is not compatible with the write class (see
+    /// [`authorize_write`] for the full compatibility matrix). This also covers a write
+    /// declared with [`RecoveryClass::NotApplicableNoWrite`] and any attempt to authorise a
+    /// command under [`RecoveryClass::StateUnknownRecoveryRequired`].
+    IncompatibleRecoveryClass,
     /// A non-write class was submitted through the write-authorisation path.
     NotAWrite,
 }
@@ -105,15 +108,50 @@ impl WriteApproval {
     }
 }
 
+/// Whether `recovery` is a legitimate recovery posture for a command of `class`.
+///
+/// This is the compatibility matrix every write is checked against. Each write/reboot class
+/// admits only the recovery classes that can actually restore the device from that kind of
+/// change:
+///
+/// | class              | permitted recovery classes                                         |
+/// |--------------------|--------------------------------------------------------------------|
+/// | `TransientConfig`  | `TransientWritePendingReconcileOnResume`, `RestoreFromBackupSupported` |
+/// | `PersistentConfig` | `AutomaticRollbackSupported`, `RestoreFromBackupSupported`          |
+/// | `Reboot`           | `ManualRecoveryRequired`                                           |
+///
+/// Consequences of this table (all rejected):
+/// * `NotApplicableNoWrite` is never valid for a real write or a reboot;
+/// * `StateUnknownRecoveryRequired` can never authorise any command;
+/// * `ManualRecoveryRequired` is rejected for a config write (it is only for a reboot);
+/// * `AutomaticRollbackSupported` is rejected for a reboot.
+const fn recovery_is_compatible(class: WriteCommandClass, recovery: RecoveryClass) -> bool {
+    match class {
+        // A read is not a write and never reaches this check.
+        WriteCommandClass::NoWrite => false,
+        WriteCommandClass::TransientConfig => matches!(
+            recovery,
+            RecoveryClass::TransientWritePendingReconcileOnResume
+                | RecoveryClass::RestoreFromBackupSupported
+        ),
+        WriteCommandClass::PersistentConfig => matches!(
+            recovery,
+            RecoveryClass::AutomaticRollbackSupported | RecoveryClass::RestoreFromBackupSupported
+        ),
+        WriteCommandClass::Reboot => matches!(recovery, RecoveryClass::ManualRecoveryRequired),
+    }
+}
+
 /// Authorise a write. Returns [`WriteApproval`] only for a simulation target with a real
-/// write class and a matching recovery class. A hardware target is always refused with
-/// [`HARDWARE_WRITE_GATE_NOT_APPROVED`].
+/// write class and a recovery class that is compatible with it (see [`recovery_is_compatible`]
+/// for the matrix). A hardware target is always refused with
+/// [`HARDWARE_WRITE_GATE_NOT_APPROVED`], and that refusal is checked **first**.
 ///
 /// # Errors
-/// - [`WriteGateError::HardwareGateNotApproved`] for [`ExecutionTarget::Hardware`];
+/// - [`WriteGateError::HardwareGateNotApproved`] for [`ExecutionTarget::Hardware`] (checked
+///   before anything else);
 /// - [`WriteGateError::NotAWrite`] for [`WriteCommandClass::NoWrite`];
-/// - [`WriteGateError::MissingRecoveryClass`] if the recovery class is
-///   [`RecoveryClass::NotApplicableNoWrite`] for an actual write.
+/// - [`WriteGateError::IncompatibleRecoveryClass`] if `recovery` is not permitted for `class`.
 pub fn authorize_write(
     target: ExecutionTarget,
     class: WriteCommandClass,
@@ -127,10 +165,8 @@ pub fn authorize_write(
     if matches!(class, WriteCommandClass::NoWrite) {
         return Err(WriteGateError::NotAWrite);
     }
-    // A reboot is not a config write but still flows through the gate; only genuine config
-    // writes must carry a non-trivial recovery class.
-    if class.is_write() && matches!(recovery, RecoveryClass::NotApplicableNoWrite) {
-        return Err(WriteGateError::MissingRecoveryClass);
+    if !recovery_is_compatible(class, recovery) {
+        return Err(WriteGateError::IncompatibleRecoveryClass);
     }
     Ok(WriteApproval {
         target,
@@ -176,15 +212,116 @@ mod tests {
         assert_eq!(approval.class(), WriteCommandClass::TransientConfig);
     }
 
+    /// Every (class, recovery) pair the matrix accepts, and it authorises on a simulation
+    /// target.
     #[test]
-    fn a_config_write_without_a_recovery_class_is_refused() {
-        assert_eq!(
-            authorize_write(
-                ExecutionTarget::Replay,
+    fn every_compatible_pair_is_authorised() {
+        let accepted = [
+            (
+                WriteCommandClass::TransientConfig,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+            (
+                WriteCommandClass::TransientConfig,
+                RecoveryClass::RestoreFromBackupSupported,
+            ),
+            (
+                WriteCommandClass::PersistentConfig,
+                RecoveryClass::AutomaticRollbackSupported,
+            ),
+            (
+                WriteCommandClass::PersistentConfig,
+                RecoveryClass::RestoreFromBackupSupported,
+            ),
+            (
+                WriteCommandClass::Reboot,
+                RecoveryClass::ManualRecoveryRequired,
+            ),
+        ];
+        for (class, recovery) in accepted {
+            let approval = authorize_write(ExecutionTarget::Mock, class, recovery)
+                .unwrap_or_else(|e| panic!("expected {class:?}/{recovery:?} to authorise: {e:?}"));
+            assert_eq!(approval.class(), class);
+            assert_eq!(approval.recovery(), recovery);
+        }
+    }
+
+    /// Representative incompatible pairs, one for each rejection the matrix must enforce.
+    #[test]
+    fn every_incompatible_pair_is_refused() {
+        let rejected = [
+            // NotApplicableNoWrite is never valid for a real write or a reboot.
+            (
+                WriteCommandClass::TransientConfig,
+                RecoveryClass::NotApplicableNoWrite,
+            ),
+            (
                 WriteCommandClass::PersistentConfig,
                 RecoveryClass::NotApplicableNoWrite,
             ),
-            Err(WriteGateError::MissingRecoveryClass),
+            (
+                WriteCommandClass::Reboot,
+                RecoveryClass::NotApplicableNoWrite,
+            ),
+            // StateUnknownRecoveryRequired can never authorise any command.
+            (
+                WriteCommandClass::TransientConfig,
+                RecoveryClass::StateUnknownRecoveryRequired,
+            ),
+            (
+                WriteCommandClass::PersistentConfig,
+                RecoveryClass::StateUnknownRecoveryRequired,
+            ),
+            (
+                WriteCommandClass::Reboot,
+                RecoveryClass::StateUnknownRecoveryRequired,
+            ),
+            // ManualRecoveryRequired is only for a reboot, never a config write.
+            (
+                WriteCommandClass::TransientConfig,
+                RecoveryClass::ManualRecoveryRequired,
+            ),
+            (
+                WriteCommandClass::PersistentConfig,
+                RecoveryClass::ManualRecoveryRequired,
+            ),
+            // AutomaticRollbackSupported is not a recovery posture for a reboot.
+            (
+                WriteCommandClass::Reboot,
+                RecoveryClass::AutomaticRollbackSupported,
+            ),
+            // A transient write cannot claim automatic rollback (that is the persistent path).
+            (
+                WriteCommandClass::TransientConfig,
+                RecoveryClass::AutomaticRollbackSupported,
+            ),
+            // A persistent write cannot claim the transient-reconcile posture.
+            (
+                WriteCommandClass::PersistentConfig,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+        ];
+        for (class, recovery) in rejected {
+            assert_eq!(
+                authorize_write(ExecutionTarget::Replay, class, recovery),
+                Err(WriteGateError::IncompatibleRecoveryClass),
+                "expected {class:?}/{recovery:?} to be refused",
+            );
+        }
+    }
+
+    #[test]
+    fn hardware_refusal_precedes_recovery_class_checks() {
+        // Even an otherwise-incompatible pair on hardware reports the hardware gate first.
+        assert_eq!(
+            authorize_write(
+                ExecutionTarget::Hardware,
+                WriteCommandClass::Reboot,
+                RecoveryClass::AutomaticRollbackSupported,
+            ),
+            Err(WriteGateError::HardwareGateNotApproved(
+                HARDWARE_WRITE_GATE_NOT_APPROVED
+            )),
         );
     }
 

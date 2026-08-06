@@ -150,6 +150,9 @@ pub enum MspError {
     WrongLength { expected: usize, got: usize },
     /// A variable-length payload declared a field longer than the bytes that remain.
     FieldOverrun { field_len: usize, remaining: usize },
+    /// A payload had bytes left over after every documented field was read. The M1 codec
+    /// pins API 1.46 and refuses to silently ignore an undocumented tail.
+    TrailingPayload { consumed: usize, total: usize },
 }
 
 /// A decoded MSPv1 frame. The payload is retained as bytes; typed accessors interpret it.
@@ -326,6 +329,17 @@ impl<'a> Reader<'a> {
         let raw = self.take(len)?;
         Ok(String::from_utf8_lossy(raw).into_owned())
     }
+
+    /// Assert the payload was fully consumed, rejecting any undocumented trailing bytes.
+    fn finish(&self) -> Result<(), MspError> {
+        if self.remaining() != 0 {
+            return Err(MspError::TrailingPayload {
+                consumed: self.pos,
+                total: self.bytes.len(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// `MSP_API_VERSION` reply — three bytes.
@@ -427,7 +441,21 @@ impl FcVersion {
     }
 }
 
+/// Number of signature bytes in a `MSP_BOARD_INFO` reply (Betaflight `SIGNATURE_LENGTH`).
+pub const SIGNATURE_LENGTH: usize = 32;
+
 /// `MSP_BOARD_INFO` reply — variable length, parsed with bounds checks on every field.
+///
+/// M1 pins MSP API 1.46, so this parser reads the **complete** payload: the identity block,
+/// the three length-prefixed names, the 32-byte signature, and every field appended up to
+/// API 1.44 (`mcu_type_id`, `configuration_state`, `gyro_sample_rate_hz`,
+/// `configuration_problems`, and the SPI/I2C device counts). A short payload is rejected as
+/// truncation and any leftover byte is rejected as an undocumented trailing tail — the
+/// parser never silently ignores a tail.
+///
+/// The `signature` is parsed so the payload can be fully consumed, but it is a per-unit
+/// value: it is deliberately **not** propagated into any reconnection identity, backup or
+/// case record (see `ade-facts`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoardInfo {
     /// Four-byte board identifier.
@@ -444,15 +472,31 @@ pub struct BoardInfo {
     pub board_name: String,
     /// Manufacturer identifier.
     pub manufacturer_id: String,
-    /// 32-byte signature.
-    pub signature: [u8; 32],
+    /// 32-byte signature (per-unit; never used as a stable identity).
+    pub signature: [u8; SIGNATURE_LENGTH],
+    /// MCU type identifier (API 1.35+).
+    pub mcu_type_id: u8,
+    /// Configuration state (API 1.42) — volatile; not part of the reconnection identity.
+    pub configuration_state: u8,
+    /// Gyro sample rate in Hz (API 1.43) — informational/volatile.
+    pub gyro_sample_rate_hz: u16,
+    /// Configuration problems bitfield (API 1.43) — volatile runtime state.
+    pub configuration_problems: u32,
+    /// Registered SPI device count (API 1.44) — volatile runtime state.
+    pub spi_device_count: u8,
+    /// Registered I2C device count (API 1.44) — volatile runtime state.
+    pub i2c_device_count: u8,
 }
 
 impl BoardInfo {
-    /// Decode from a `MSP_BOARD_INFO` reply frame with a fully bounded parser.
+    /// Decode from a `MSP_BOARD_INFO` reply frame with a fully bounded parser that consumes
+    /// the entire API 1.46 payload.
     ///
     /// # Errors
-    /// Wrong command/direction, or any length prefix that would read past the frame.
+    /// - wrong command/direction;
+    /// - [`MspError::FieldOverrun`] for any length prefix or fixed field that would read past
+    ///   the frame (truncation);
+    /// - [`MspError::TrailingPayload`] if any byte remains after the last documented field.
     pub fn from_reply(frame: &Frame) -> Result<Self, MspError> {
         frame.expect(CommandId::BoardInfo, true)?;
         let mut r = Reader::new(frame.payload());
@@ -464,9 +508,16 @@ impl BoardInfo {
         let target_name = r.length_prefixed_string()?;
         let board_name = r.length_prefixed_string()?;
         let manufacturer_id = r.length_prefixed_string()?;
-        let sig = r.take(32)?;
-        let mut signature = [0u8; 32];
+        let sig = r.take(SIGNATURE_LENGTH)?;
+        let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(sig);
+        let mcu_type_id = r.u8()?;
+        let configuration_state = r.u8()?;
+        let gyro_sample_rate_hz = r.u16_le()?;
+        let configuration_problems = r.u32_le()?;
+        let spi_device_count = r.u8()?;
+        let i2c_device_count = r.u8()?;
+        r.finish()?;
         Ok(Self {
             board_identifier,
             hardware_revision,
@@ -476,6 +527,12 @@ impl BoardInfo {
             board_name,
             manufacturer_id,
             signature,
+            mcu_type_id,
+            configuration_state,
+            gyro_sample_rate_hz,
+            configuration_problems,
+            spi_device_count,
+            i2c_device_count,
         })
     }
 }
@@ -706,26 +763,83 @@ mod tests {
         assert_eq!(var.identifier_string(), "BTFL");
     }
 
+    /// Build a complete API 1.46 `MSP_BOARD_INFO` payload for tests.
+    #[allow(clippy::too_many_arguments)]
+    fn board_info_payload(
+        id: &[u8; 4],
+        hw_rev: u16,
+        fc_type: u8,
+        caps: u8,
+        target: &[u8],
+        board: &[u8],
+        mfr: &[u8],
+        signature: &[u8; SIGNATURE_LENGTH],
+        mcu_type_id: u8,
+        configuration_state: u8,
+        gyro_sample_rate_hz: u16,
+        configuration_problems: u32,
+        spi: u8,
+        i2c: u8,
+    ) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(id);
+        p.extend_from_slice(&hw_rev.to_le_bytes());
+        p.push(fc_type);
+        p.push(caps);
+        p.push(target.len() as u8);
+        p.extend_from_slice(target);
+        p.push(board.len() as u8);
+        p.extend_from_slice(board);
+        p.push(mfr.len() as u8);
+        p.extend_from_slice(mfr);
+        p.extend_from_slice(signature);
+        p.push(mcu_type_id);
+        p.push(configuration_state);
+        p.extend_from_slice(&gyro_sample_rate_hz.to_le_bytes());
+        p.extend_from_slice(&configuration_problems.to_le_bytes());
+        p.push(spi);
+        p.push(i2c);
+        p
+    }
+
     #[test]
-    fn board_info_bounded_parser_round_trips() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(b"S405"); // board identifier
-        payload.extend_from_slice(&7u16.to_le_bytes()); // hw revision
-        payload.push(2); // fc type
-        payload.push(0b0000_0001); // capabilities
-        payload.push(13);
-        payload.extend_from_slice(b"SPEEDYBEEF405");
-        payload.push(4);
-        payload.extend_from_slice(b"SBV4");
-        payload.push(3);
-        payload.extend_from_slice(b"SPB");
-        payload.extend_from_slice(&[0u8; 32]); // signature
+    fn board_info_bounded_parser_round_trips_the_full_api_1_46_payload() {
+        let sig = {
+            let mut s = [0u8; SIGNATURE_LENGTH];
+            for (i, b) in s.iter_mut().enumerate() {
+                *b = i as u8;
+            }
+            s
+        };
+        let payload = board_info_payload(
+            b"S405",
+            7,
+            2,
+            0b0000_0001,
+            b"SPEEDYBEEF405",
+            b"SBV4",
+            b"SPB",
+            &sig,
+            0x1B, // mcu_type_id
+            3,    // configuration_state
+            8000, // gyro_sample_rate_hz
+            0x0000_0002,
+            4, // spi count
+            1, // i2c count
+        );
         let frame = decode_frame(&reply(CommandId::BoardInfo, &payload)).unwrap();
         let info = BoardInfo::from_reply(&frame).unwrap();
         assert_eq!(&info.board_identifier, b"S405");
         assert_eq!(info.hardware_revision, 7);
         assert_eq!(info.target_name, "SPEEDYBEEF405");
         assert_eq!(info.manufacturer_id, "SPB");
+        assert_eq!(info.signature, sig);
+        assert_eq!(info.mcu_type_id, 0x1B);
+        assert_eq!(info.configuration_state, 3);
+        assert_eq!(info.gyro_sample_rate_hz, 8000);
+        assert_eq!(info.configuration_problems, 0x0000_0002);
+        assert_eq!(info.spi_device_count, 4);
+        assert_eq!(info.i2c_device_count, 1);
     }
 
     #[test]
@@ -742,6 +856,46 @@ mod tests {
         assert!(matches!(
             BoardInfo::from_reply(&frame),
             Err(MspError::FieldOverrun { .. })
+        ));
+    }
+
+    #[test]
+    fn board_info_rejects_a_payload_truncated_after_the_signature() {
+        // A payload that stops right at the signature (the pre-1.46 shape) is now truncation:
+        // the API 1.46 post-signature fields are mandatory and must be present.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"S405");
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.push(0);
+        payload.push(0);
+        payload.push(4);
+        payload.extend_from_slice(b"TGT4");
+        payload.push(4);
+        payload.extend_from_slice(b"BRD4");
+        payload.push(3);
+        payload.extend_from_slice(b"SPB");
+        payload.extend_from_slice(&[0u8; SIGNATURE_LENGTH]); // signature, then nothing
+        let frame = decode_frame(&reply(CommandId::BoardInfo, &payload)).unwrap();
+        assert!(matches!(
+            BoardInfo::from_reply(&frame),
+            Err(MspError::FieldOverrun { .. })
+        ));
+    }
+
+    #[test]
+    fn board_info_rejects_an_undocumented_trailing_tail() {
+        let sig = [0u8; SIGNATURE_LENGTH];
+        let mut payload = board_info_payload(
+            b"S405", 0, 0, 0, b"TGT4", b"BRD4", b"SPB", &sig, 0, 0, 0, 0, 0, 0,
+        );
+        payload.push(0xAB); // one undocumented trailing byte
+        let frame = decode_frame(&reply(CommandId::BoardInfo, &payload)).unwrap();
+        assert!(matches!(
+            BoardInfo::from_reply(&frame),
+            Err(MspError::TrailingPayload {
+                consumed: _,
+                total: _
+            })
         ));
     }
 
