@@ -6,7 +6,10 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import com.autonomousdroneexpert.m1c.domain.Acquired
 import com.autonomousdroneexpert.m1c.domain.ClassifiedError
+import com.autonomousdroneexpert.m1c.domain.CloseOutcome
+import com.autonomousdroneexpert.m1c.domain.OpenSequence
 import com.autonomousdroneexpert.m1c.domain.Openable
 import com.autonomousdroneexpert.m1c.domain.OpenResult
 import com.autonomousdroneexpert.m1c.domain.ReadOnlySession
@@ -52,17 +55,28 @@ class AndroidUsbTransport(
                 ?: return@withContext OpenResult.Failed(
                     ClassifiedError(TransportError.OPEN_FAILED, "openDevice returned null (busy or gone)")
                 )
-            if (!connection.claimInterface(iface, true)) {
-                connection.close()
-                return@withContext OpenResult.Failed(
+            // Resource-ownership guard: the connection is already open. If the claim is
+            // rejected, or the session constructor fails/throws, OpenSequence releases (only
+            // if claimed) and closes the connection -- no leaked handle. On success ownership
+            // transfers to the session (which then owns release + close).
+            //
+            // baud is accepted for parity with the contract; we deliberately do NOT send a
+            // SET_LINE_CODING control transfer (that would be an OUT control transfer).
+            when (
+                val acquired = OpenSequence.acquire(
+                    claim = { connection.claimInterface(iface, true) },
+                    makeSession = {
+                        AndroidReadOnlySession(manager, device, connection, iface, inEndpoint, readTimeoutMs)
+                    },
+                    release = { connection.releaseInterface(iface) },
+                    close = { connection.close() },
+                )
+            ) {
+                is Acquired.Session -> OpenResult.Opened(acquired.session)
+                Acquired.ClaimRejected -> OpenResult.Failed(
                     ClassifiedError(TransportError.PORT_BUSY, "claimInterface failed (interface busy)")
                 )
             }
-            // baud is accepted for parity with the contract; we deliberately do NOT send a
-            // SET_LINE_CODING control transfer (that would be an OUT control transfer).
-            OpenResult.Opened(
-                AndroidReadOnlySession(manager, device, connection, iface, inEndpoint, readTimeoutMs)
-            )
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -123,16 +137,25 @@ private class AndroidReadOnlySession(
     private fun deviceStillPresent(): Boolean =
         manager.deviceList.values.any { it.deviceId == device.deviceId }
 
-    override fun close() {
-        // A releaseInterface failure must not prevent the close, nor mask it: swallow the
-        // release error but always attempt close. close() may still throw, and the caller
-        // (single-open records it; other stages close quietly) decides how to record it.
+    override fun close(): CloseOutcome {
+        // Record, never swallow: releaseInterface returning false or throwing, and any
+        // connection.close() throwable, are captured. close() is ALWAYS attempted even when
+        // release fails. The first safe error is kept and reported to the caller.
+        var firstError: ClassifiedError? = null
         try {
-            connection.releaseInterface(iface)
-        } catch (_: Throwable) {
-            // release failure is non-fatal; proceed to close.
-        } finally {
-            connection.close()
+            if (!connection.releaseInterface(iface)) {
+                firstError = ClassifiedError(
+                    TransportError.UNKNOWN_IO_ERROR, "releaseInterface returned false",
+                )
+            }
+        } catch (t: Throwable) {
+            if (firstError == null) firstError = TransportClassifiers.classifyThrowable(t)
         }
+        try {
+            connection.close()
+        } catch (t: Throwable) {
+            if (firstError == null) firstError = TransportClassifiers.classifyThrowable(t)
+        }
+        return firstError?.let { CloseOutcome.Failed(it) } ?: CloseOutcome.Clean
     }
 }

@@ -7,6 +7,7 @@ package com.autonomousdroneexpert.m1c.domain
  */
 class FakeReadOnlySession(
     private val script: MutableList<ReadOutcome>,
+    private val closeOutcome: CloseOutcome = CloseOutcome.Clean,
 ) : ReadOnlySession {
     var closed = false
         private set
@@ -14,8 +15,9 @@ class FakeReadOnlySession(
     override suspend fun read(): ReadOutcome =
         if (script.isNotEmpty()) script.removeAt(0) else ReadOutcome.TimedOut(250.0)
 
-    override fun close() {
+    override fun close(): CloseOutcome {
         closed = true
+        return closeOutcome
     }
 }
 
@@ -23,6 +25,9 @@ class FakeOpenable(
     override val info: UsbDeviceInfo,
     private val openError: ClassifiedError? = null,
     private val readScript: () -> MutableList<ReadOutcome> = { mutableListOf() },
+    // Per-open close outcome, indexed by the 1-based open count, so tests can make a
+    // specific cycle's close fail (e.g. the 20th of 20).
+    private val closeOutcome: (openIndex: Int) -> CloseOutcome = { CloseOutcome.Clean },
 ) : Openable {
     var opens = 0
         private set
@@ -30,7 +35,7 @@ class FakeOpenable(
     override suspend fun open(baud: Int, readTimeoutMs: Int): OpenResult {
         opens++
         return openError?.let { OpenResult.Failed(it) }
-            ?: OpenResult.Opened(FakeReadOnlySession(readScript()))
+            ?: OpenResult.Opened(FakeReadOnlySession(readScript(), closeOutcome(opens)))
     }
 
     companion object {

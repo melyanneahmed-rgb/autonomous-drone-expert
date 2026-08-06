@@ -23,7 +23,17 @@ sealed interface OpenResult {
 /** A live read-only session. `read` blocks up to the configured timeout. No write exists. */
 interface ReadOnlySession {
     suspend fun read(): ReadOutcome
-    fun close()
+    /**
+     * Close the session. Never throws: a release/close failure is reported as
+     * [CloseOutcome.Failed] with the first safe classified error, never swallowed.
+     */
+    fun close(): CloseOutcome
+}
+
+/** The outcome of closing a session -- a close failure is evidence, not something to hide. */
+sealed interface CloseOutcome {
+    data object Clean : CloseOutcome
+    data class Failed(val error: ClassifiedError) : CloseOutcome
 }
 
 /**

@@ -111,7 +111,7 @@ class ReadOnlyHardwareTestRunnerTest {
         assertTrue("port closed after the dwell", session.closed)
         assertTrue("records dwell duration", obs.detail.contains("dwell=3000"))
         assertTrue("records open latency", obs.detail.contains("open_latency="))
-        assertTrue("records close outcome", obs.detail.contains("close=clean"))
+        assertTrue("records close outcome", obs.detail.contains("close=CLEAN"))
     }
 
     @Test
@@ -161,7 +161,7 @@ class ReadOnlyHardwareTestRunnerTest {
         var closed = false
         val throwingSession = object : ReadOnlySession {
             override suspend fun read(): ReadOutcome = throw IllegalStateException("read boom")
-            override fun close() { closed = true }
+            override fun close(): CloseOutcome { closed = true; return CloseOutcome.Clean }
         }
         val target = object : Openable {
             override val info = FakeOpenable.info()
@@ -171,5 +171,72 @@ class ReadOnlyHardwareTestRunnerTest {
         assertTrue("session closed in finally", closed)
         // The thrown read is classified (UNKNOWN_IO_ERROR), never crashes the stage.
         assertEquals(ObservationStatus.OBSERVED_WITH_ERRORS, obs.status)
+    }
+
+    // ---- review round 2: close-failure is evidence, never swallowed or counted clean ----
+
+    private fun closeFail(message: String = "close boom") =
+        CloseOutcome.Failed(ClassifiedError(TransportError.UNKNOWN_IO_ERROR, message))
+
+    @Test
+    fun `a close failure is not counted as a clean cycle`() = runTest {
+        // 20 opens: the 20th cycle's close fails, so at most 19 can be clean.
+        val target = FakeOpenable(
+            FakeOpenable.info(),
+            closeOutcome = { i -> if (i == 20) closeFail("release failed on cycle 20") else CloseOutcome.Clean },
+        )
+        val obs = runner.openCloseCycles(target, cycles = 20, baud = 115_200, timeoutMs = 250)
+        assertEquals(20, target.opens)
+        assertEquals("19+1 close-fail must not read 20/20 clean",
+            ObservationStatus.CLASSIFIED_ERROR, obs.status)
+        assertEquals(TransportError.UNKNOWN_IO_ERROR, obs.error)
+        assertTrue("clean count excludes the failed close", obs.detail.startsWith("19/20 clean"))
+    }
+
+    @Test
+    fun `single open records a close failure as a classified error`() = runTest {
+        val target = FakeOpenable(FakeOpenable.info(), closeOutcome = { closeFail("close failed") })
+        val obs = runner.singleOpen(target, 115_200, 250, dwellMs = 0)
+        assertEquals(ObservationStatus.CLASSIFIED_ERROR, obs.status)
+        assertEquals(TransportError.UNKNOWN_IO_ERROR, obs.error)
+        assertTrue("close error surfaced in detail", obs.detail.contains("close_error:"))
+    }
+
+    @Test
+    fun `read-timeout accuracy surfaces a close failure without hiding the read evidence`() = runTest {
+        val target = FakeOpenable(
+            FakeOpenable.info(),
+            readScript = { mutableListOf(ReadOutcome.TimedOut(250.0), ReadOutcome.TimedOut(262.0)) },
+            closeOutcome = { closeFail("close failed") },
+        )
+        val obs = runner.readTimeoutAccuracy(target, timeoutMs = 250, samples = 2)
+        assertEquals(ObservationStatus.OBSERVED_WITH_ERRORS, obs.status)
+        assertEquals(TransportError.UNKNOWN_IO_ERROR, obs.error)
+        // Read evidence preserved...
+        assertNotNull(obs.timeoutStats)
+        assertTrue(obs.detail.contains("timeout_samples=2"))
+        // ...and the close failure is added, not swallowed.
+        assertTrue(obs.detail.contains("close_error:"))
+    }
+
+    @Test
+    fun `unplug keeps the disconnect evidence and adds a close failure without hiding it`() = runTest {
+        val target = FakeOpenable(
+            FakeOpenable.info(),
+            readScript = {
+                mutableListOf(
+                    ReadOutcome.TimedOut(1000.0),
+                    ReadOutcome.Failed(ClassifiedError(TransportError.DEVICE_DISCONNECTED, "gone"), elapsedMs = 42.0),
+                )
+            },
+            closeOutcome = { closeFail("close failed") },
+        )
+        val obs = runner.unplugDetection(target, timeoutMs = 1000, maxSlices = 10)
+        // Disconnect stays the headline classification (evidence not hidden by the close error).
+        assertEquals(ObservationStatus.CLASSIFIED_ERROR, obs.status)
+        assertEquals(TransportError.DEVICE_DISCONNECTED, obs.error)
+        assertTrue("disconnect evidence kept", obs.detail.contains("DEVICE_DISCONNECTED"))
+        assertTrue("slice timing kept", obs.detail.contains("slice_elapsed=42.0"))
+        assertTrue("close failure added", obs.detail.contains("close_error:"))
     }
 }
