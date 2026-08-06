@@ -100,6 +100,56 @@ impl<R: FrameResponder> FrameResponder for FaultInjector<R> {
     }
 }
 
+/// Injects faults at several chosen request ordinals (0-based); delegates everything else.
+/// Used by compound failure scenarios (e.g. a save failure followed by a recovery failure).
+#[derive(Debug)]
+pub struct ScheduledFaultInjector<R: FrameResponder> {
+    inner: R,
+    schedule: Vec<(usize, Fault)>,
+    calls: usize,
+}
+
+impl<R: FrameResponder> ScheduledFaultInjector<R> {
+    /// Inject each `(ordinal, fault)` pair at its 0-based request ordinal.
+    pub fn new(inner: R, schedule: Vec<(usize, Fault)>) -> Self {
+        Self {
+            inner,
+            schedule,
+            calls: 0,
+        }
+    }
+
+    /// How many requests have been handled so far.
+    #[must_use]
+    pub fn calls(&self) -> usize {
+        self.calls
+    }
+}
+
+impl<R: FrameResponder> FrameResponder for ScheduledFaultInjector<R> {
+    fn respond(&mut self, request: &[u8]) -> Result<Vec<u8>, TransportError> {
+        let ordinal = self.calls;
+        self.calls += 1;
+        let Some(&(_, fault)) = self.schedule.iter().find(|(at, _)| *at == ordinal) else {
+            return self.inner.respond(request);
+        };
+        if let Some(error) = fault.as_error() {
+            return Err(error);
+        }
+        match fault {
+            Fault::CorruptFrame => Ok(vec![0x00, 0x01, 0x02, 0x03]),
+            Fault::BadChecksum => {
+                let mut bytes = self.inner.respond(request)?;
+                if let Some(last) = bytes.last_mut() {
+                    *last ^= 0xFF;
+                }
+                Ok(bytes)
+            }
+            _ => unreachable!("error-shaped faults handled above"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +183,19 @@ mod tests {
         let bytes = injector.respond(b"x").unwrap();
         // The mock's checksum byte was 0x00; flipping it yields 0xFF.
         assert_eq!(bytes[bytes.len() - 1], 0xFF);
+    }
+
+    #[test]
+    fn a_scheduled_injector_fires_at_each_chosen_ordinal_only() {
+        let mut injector = ScheduledFaultInjector::new(
+            AlwaysOk,
+            vec![(1, Fault::Timeout), (3, Fault::Disconnected)],
+        );
+        assert!(injector.respond(b"a").is_ok()); // 0
+        assert_eq!(injector.respond(b"b"), Err(TransportError::Timeout)); // 1
+        assert!(injector.respond(b"c").is_ok()); // 2
+        assert_eq!(injector.respond(b"d"), Err(TransportError::Disconnected)); // 3
+        assert!(injector.respond(b"e").is_ok()); // 4
+        assert_eq!(injector.calls(), 5);
     }
 }

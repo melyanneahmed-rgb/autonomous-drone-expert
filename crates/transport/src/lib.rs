@@ -182,6 +182,22 @@ pub trait FrameResponder {
     fn respond(&mut self, request: &[u8]) -> Result<Vec<u8>, TransportError>;
 }
 
+/// Phase control for a simulation transport: the orchestrator moves the transport between
+/// the fail-closed identification phase and normal operation. Re-entering identification is
+/// required after every reboot/reconnect so the allow-list applies to re-identification too.
+pub trait PhasedTransport {
+    /// Enter the operational phase (identification finished).
+    fn enter_operational(&mut self);
+    /// Re-enter the fail-closed identification phase (e.g. after a reconnect).
+    fn begin_identification(&mut self);
+}
+
+/// Read access to the metadata-only audit trail of a simulation transport.
+pub trait AuditAccess {
+    /// The recorded outbound-frame metadata, in order.
+    fn audit_entries(&self) -> &[AuditEntry];
+}
+
 /// The logical transport contract. Mock and Replay implement it; there is no OS adapter.
 pub trait LogicalTransport {
     /// Open the logical connection.
@@ -226,6 +242,11 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
         self.phase = Phase::Operational;
     }
 
+    /// Re-enter the fail-closed identification phase (used after a reconnect).
+    pub fn begin_identification(&mut self) {
+        self.phase = Phase::Identifying;
+    }
+
     /// The audit sink.
     pub fn audit(&self) -> &A {
         &self.audit
@@ -263,6 +284,22 @@ impl<R: FrameResponder, A: AuditSink> LogicalTransport for MockTransport<R, A> {
 
     fn close(&mut self) {
         self.open = false;
+    }
+}
+
+impl<R: FrameResponder, A: AuditSink> PhasedTransport for MockTransport<R, A> {
+    fn enter_operational(&mut self) {
+        MockTransport::enter_operational(self);
+    }
+
+    fn begin_identification(&mut self) {
+        MockTransport::begin_identification(self);
+    }
+}
+
+impl<R: FrameResponder> AuditAccess for MockTransport<R, InMemoryAudit> {
+    fn audit_entries(&self) -> &[AuditEntry] {
+        self.audit.entries()
     }
 }
 
@@ -323,6 +360,11 @@ impl<A: AuditSink> ReplayTransport<A> {
     /// Move to the operational phase.
     pub fn enter_operational(&mut self) {
         self.phase = Phase::Operational;
+    }
+
+    /// Re-enter the fail-closed identification phase (used after a reconnect).
+    pub fn begin_identification(&mut self) {
+        self.phase = Phase::Identifying;
     }
 
     /// The audit sink.
@@ -401,6 +443,22 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
 
     fn close(&mut self) {
         self.open = false;
+    }
+}
+
+impl<A: AuditSink> PhasedTransport for ReplayTransport<A> {
+    fn enter_operational(&mut self) {
+        ReplayTransport::enter_operational(self);
+    }
+
+    fn begin_identification(&mut self) {
+        ReplayTransport::begin_identification(self);
+    }
+}
+
+impl AuditAccess for ReplayTransport<InMemoryAudit> {
+    fn audit_entries(&self) -> &[AuditEntry] {
+        self.audit.entries()
     }
 }
 
@@ -650,6 +708,26 @@ mod tests {
             t.audit().entries().last().unwrap().disposition,
             AuditDisposition::Sent
         );
+    }
+
+    #[test]
+    fn begin_identification_re_arms_the_fail_closed_guard() {
+        let mut t = MockTransport::new(CountingOk { calls: 0 }, InMemoryAudit::new());
+        t.open().unwrap();
+        t.enter_operational();
+        assert!(t.exchange(&request(CommandId::BeeperConfig)).is_ok());
+        // Re-entering identification (as after a reconnect) blocks the same read again.
+        PhasedTransport::begin_identification(&mut t);
+        assert_eq!(
+            t.exchange(&request(CommandId::BeeperConfig)),
+            Err(TransportError::CommandNotAllowedDuringIdentify(
+                CommandId::BeeperConfig.as_u8()
+            )),
+        );
+        // And the audit trail is reachable through the AuditAccess trait.
+        let entries = AuditAccess::audit_entries(&t);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].disposition, AuditDisposition::BlockedNotSent);
     }
 
     #[test]
