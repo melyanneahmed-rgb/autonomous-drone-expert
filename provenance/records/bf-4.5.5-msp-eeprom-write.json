@@ -16,9 +16,14 @@
     "path": "src/main/msp/msp_protocol.h",
     "url": "https://raw.githubusercontent.com/betaflight/betaflight/4.5.5/src/main/msp/msp_protocol.h",
     "retrieved_at": "2026-08-05",
-    "retrieved_by": "m0-foundation-batch"
+    "retrieved_by": "m0-foundation-batch",
+    "resolved_commit": "4adbd3ef7cb546947600e5f747bd5453c9573063"
   },
-  "payload_layout": null,
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": 0,
+    "note": "In: no configuration payload. Refused while ARMED (MSP result error). On success the reply is a result-code ACK with no data. The save has real latency; the ACK is NOT proof the write completed. src/main/msp/msp.c lines 3299-3317 (blob 804d1dd3c9ee55cb0995f92352bac6d50911c671) @4.5.5."
+  },
   "source_state": "PINNED_SOURCE_RECORDED",
   "verification_state": "NOT_REPRODUCED",
   "verification": {
