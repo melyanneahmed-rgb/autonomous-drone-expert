@@ -1,4 +1,4 @@
-# `ui/` — user interface package (not implemented)
+# `ui/` — Web/PWA product interface (repository package not implemented)
 
 This directory is a **placeholder**. No user interface exists here yet.
 
@@ -25,3 +25,7 @@ This directory is a **placeholder**. No user interface exists here yet.
    flow through a single orchestrator, not ad-hoc screens.
 3. Risk is never hidden to make a screen look friendlier.
 4. Every waiting screen states what is actually happening.
+5. Internal firmware-family and configurator names are not product navigation or identity.
+6. All supported technical settings are automatic. The only manual configuration decision
+   is assigning physical transmitter switch/button functions; the UI observes and validates
+   that choice but never invents it.

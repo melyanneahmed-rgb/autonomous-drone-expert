@@ -104,6 +104,7 @@ plus facts read from the running board — never from the presence of a file.
   suite, not a core release.
 - The safety-critical core stays small, stable and auditable.
 - Pack signing, revocation and distribution infrastructure becomes a real deliverable
-  (milestone M10), and must exist before packs are distributed rather than after.
+  (the Knowledge Platform milestone, currently M11), and must exist before packs are
+  distributed rather than after.
 - This architecture **does not** reduce what the program can do to an aircraft. It makes
   version and board coverage expandable without pushing volatile knowledge into the core.

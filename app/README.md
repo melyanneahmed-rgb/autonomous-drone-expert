@@ -1,20 +1,20 @@
-# `app/` — desktop application shell (not implemented)
+# `app/` — optional native product shells (not implemented)
 
 This directory is a **placeholder**. No application exists here yet.
 
-## Provisionally approved platform
+## Current platform decision
 
 | Concern | Decision | Status |
 | --- | --- | --- |
-| Shell | Tauri 2 | Provisionally approved (ADR-0002) |
-| Core | Rust | Approved |
+| Primary shell | Web/PWA | Approved (ADR-0010) |
+| Native shell | Tauri 2 or another audited wrapper | Optional; capability-driven |
+| Core | Rust native + WebAssembly | Approved |
 | UI | TypeScript + React | Approved (ADR-0002) |
 | Direction | RTL-first (Arabic), English second | Approved |
-| Primary platform | Windows-first, then macOS and Linux | Approved |
+| Platform order | Web/PWA, then Windows and Android packages | Approved |
 
-The exact Tauri version is **not** pinned here. It will be the latest stable, reviewed
-release at the time the application batch is created, audited and then pinned exactly in
-the lockfiles.
+No native shell dependency is approved by this document. Any wrapper is selected, audited
+and pinned only when a browser capability gap requires it.
 
 ## Not in this batch
 

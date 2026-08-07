@@ -1,6 +1,4 @@
-# Structural pnpm workspace.
-#
-# No package.json, no runtime dependencies, no React, no Vite, no Tauri tooling in this
-# batch. The UI package is created only when the UI batch is approved.
+# Structural pnpm workspace. The Web/PWA source enters only with its dedicated dependency
+# audit and CI gates; this correction gate introduces no JavaScript runtime dependency.
 packages:
   - "ui"

@@ -75,11 +75,11 @@ mock tests appropriate to the fact. No quoted upstream material, ever.
 
 ## 5. Dependencies
 
-There are currently **zero** production dependencies, and CI enforces that for the
-foundation batch. Introducing the first dependency is its own pull request and must
-include: the candidate, the exact version, its license, its maintenance status, the
-platforms it supports, the risk, the alternative considered, and whether legal review is
-required. `deny.toml` must be enabled as a required check in the same pull request.
+Production crates currently use first-party workspace path dependencies only (ADR-0009);
+external production dependencies remain prohibited. Introducing the first external
+dependency is its own pull request and must include: the candidate, exact version, license,
+maintenance status, supported platforms, risk, alternative considered and whether legal
+review is required. `cargo-deny` remains a required check.
 
 ## 6. Toolchain
 

@@ -2,8 +2,9 @@
 
 > **Internal working name.** The final product name is deferred (see `docs/adr/ADR-0004`).
 
-An independent engineering platform for **configuring, diagnosing and programming drones**
-that run Betaflight or INAV firmware.
+An independent, offline-first expert for **configuring, diagnosing and programming drones**
+from their components and intended flight style. Firmware compatibility engines remain
+internal implementation details rather than the product identity.
 
 ## Status
 
@@ -57,6 +58,7 @@ lifecycle. It does not depend on, import from, or share code with any other repo
 | Source provenance policy | `provenance/README.md` |
 | Hardware support matrix | `docs/hardware-support-matrix/README.md` |
 | M1 simulation acceptance candidate | `docs/m1/README.md` |
+| Binding product contract | `docs/product/PRODUCT-CONTRACT.md` |
 
 ## Licensing
 
