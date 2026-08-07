@@ -44,13 +44,9 @@ impl StorageKey {
         let value = value.into();
         if value.is_empty()
             || value.len() > 64
-            || !value
-                .bytes()
-                .all(|byte| {
-                    byte.is_ascii_lowercase()
-                        || byte.is_ascii_digit()
-                        || b"_-".contains(&byte)
-                })
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte)
+            })
         {
             return Err(BoundaryError::InvalidStorageKey);
         }
@@ -340,10 +336,7 @@ impl IoCoordinator {
     /// # Errors
     /// Returns [`BoundaryError::TransportRequestAlreadyPending`] until the pending response
     /// is accepted, or [`BoundaryError::RequestIdExhausted`] on counter exhaustion.
-    pub fn begin_transport(
-        &mut self,
-        effect: TransportEffect,
-    ) -> Result<IoEffect, BoundaryError> {
+    pub fn begin_transport(&mut self, effect: TransportEffect) -> Result<IoEffect, BoundaryError> {
         if self.pending_transport.is_some() {
             return Err(BoundaryError::TransportRequestAlreadyPending);
         }
