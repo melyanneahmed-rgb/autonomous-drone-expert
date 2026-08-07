@@ -791,6 +791,143 @@ mod tests {
     }
 
     #[test]
+    fn binary_codec_round_trips_every_trusted_discriminant() {
+        let events = vec![
+            JournalEvent::Started {
+                execution_target: ExecutionTarget::Mock,
+            },
+            JournalEvent::Started {
+                execution_target: ExecutionTarget::Replay,
+            },
+            JournalEvent::Started {
+                execution_target: ExecutionTarget::Hardware,
+            },
+            JournalEvent::IdentityRead,
+            JournalEvent::SnapshotRead,
+            JournalEvent::BackedUp,
+            JournalEvent::TransientWriteApplied {
+                field: "beeper_off_flags",
+                mask: 0xa5a5_5a5a,
+            },
+            JournalEvent::ReReadBeforeSave,
+            JournalEvent::Saved,
+            JournalEvent::Rebooted,
+            JournalEvent::Reconnected,
+            JournalEvent::Verified,
+            JournalEvent::RecoveryStarted,
+            JournalEvent::Restored,
+            JournalEvent::StateUnknown,
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::NoWrite,
+                recovery: RecoveryClass::NotApplicableNoWrite,
+            },
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::TransientConfig,
+                recovery: RecoveryClass::TransientWritePendingReconcileOnResume,
+            },
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::PersistentConfig,
+                recovery: RecoveryClass::AutomaticRollbackSupported,
+            },
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::Reboot,
+                recovery: RecoveryClass::RestoreFromBackupSupported,
+            },
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::TransientConfig,
+                recovery: RecoveryClass::ManualRecoveryRequired,
+            },
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::PersistentConfig,
+                recovery: RecoveryClass::StateUnknownRecoveryRequired,
+            },
+        ];
+        for event in events {
+            assert_eq!(decode_event(&encode_event(&event)), Some(event));
+        }
+
+        assert_eq!(decode_event(&[1, u8::MAX]), None);
+        assert_eq!(decode_event(&[14, u8::MAX, 0]), None);
+        assert_eq!(decode_event(&[14, 0, u8::MAX]), None);
+        assert_eq!(decode_event(&[u8::MAX]), None);
+        assert_eq!(
+            decode_event(&encode_event(&JournalEvent::TransientWriteApplied {
+                field: "untrusted_field",
+                mask: 0,
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn format_bounds_and_untrusted_events_fail_closed() {
+        assert_eq!(
+            Journal::with_limit(HEADER_LEN - 1).unwrap_err(),
+            JournalError::LimitTooSmall
+        );
+
+        let missing = temp_path("limit-before-create");
+        assert_eq!(
+            Journal::open(&missing, HEADER_LEN - 1).unwrap_err(),
+            JournalError::LimitTooSmall
+        );
+        assert!(!missing.exists());
+
+        let oversized = temp_path("file-over-bound");
+        let mut oversized_bytes = header().to_vec();
+        oversized_bytes.push(0);
+        fs::write(&oversized, oversized_bytes).unwrap();
+        assert_eq!(
+            Journal::open(&oversized, HEADER_LEN).unwrap_err(),
+            JournalError::Full { limit: HEADER_LEN }
+        );
+        fs::remove_file(oversized).unwrap();
+
+        let invalid_header = temp_path("reserved-header");
+        let mut invalid_header_bytes = header();
+        invalid_header_bytes[6] = 1;
+        fs::write(&invalid_header, invalid_header_bytes).unwrap();
+        assert_eq!(
+            Journal::open(&invalid_header, 1024).unwrap_err(),
+            JournalError::InvalidHeader
+        );
+        fs::remove_file(invalid_header).unwrap();
+
+        let invalid_record = temp_path("invalid-record");
+        let payload = [u8::MAX];
+        let mut invalid_record_bytes = header().to_vec();
+        invalid_record_bytes.extend((payload.len() as u32).to_le_bytes());
+        invalid_record_bytes.extend(payload);
+        invalid_record_bytes.extend(checksum(&payload).to_le_bytes());
+        fs::write(&invalid_record, invalid_record_bytes).unwrap();
+        assert_eq!(
+            Journal::open(&invalid_record, 1024).unwrap_err(),
+            JournalError::InvalidRecord { offset: HEADER_LEN }
+        );
+        fs::remove_file(invalid_record).unwrap();
+
+        let empty = temp_path("empty");
+        fs::write(&empty, []).unwrap();
+        assert_eq!(
+            Journal::open(&empty, 1024).unwrap_err(),
+            JournalError::InvalidMagic
+        );
+        fs::remove_file(empty).unwrap();
+
+        let mut journal = Journal::new();
+        let expected = JournalError::InvalidRecord { offset: HEADER_LEN };
+        assert_eq!(
+            journal.try_append(JournalEvent::TransientWriteApplied {
+                field: "untrusted_field",
+                mask: 0,
+            }),
+            Err(expected.clone())
+        );
+        assert_eq!(journal.last_error(), Some(&expected));
+        assert!(journal.events().is_empty());
+    }
+
+    #[test]
     fn torn_tail_is_removed_before_the_next_append() {
         let path = temp_path("torn-tail");
         let proven_len;

@@ -165,10 +165,7 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
         let _ = journal.try_append(JournalEvent::StateUnknown);
         RecoveryResult::StateUnknown(e)
     };
-    if journal
-        .try_append(JournalEvent::RecoveryStarted)
-        .is_err()
-    {
+    if journal.try_append(JournalEvent::RecoveryStarted).is_err() {
         return fail(evidence, RecoveryStage::Journal, journal);
     }
 
@@ -246,10 +243,7 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
     if !dshot_matches(&reread, backup) {
         return fail(evidence, RecoveryStage::DshotMismatch, journal);
     }
-    if journal
-        .try_append(JournalEvent::ReReadBeforeSave)
-        .is_err()
-    {
+    if journal.try_append(JournalEvent::ReReadBeforeSave).is_err() {
         return fail(evidence, RecoveryStage::Journal, journal);
     }
 

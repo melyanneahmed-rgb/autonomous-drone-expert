@@ -369,7 +369,9 @@ pub const fn goal_from_backup(backup: &Backup) -> SystemInitBeeperGoal {
 
 fn contains_subsequence(events: &[JournalEvent], required: &[JournalEvent]) -> bool {
     let mut iter = events.iter();
-    required.iter().all(|required| iter.any(|event| event == required))
+    required
+        .iter()
+        .all(|required| iter.any(|event| event == required))
 }
 
 struct Engine<T> {
@@ -470,10 +472,7 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         }
     }
 
-    fn record(
-        &mut self,
-        event: JournalEvent,
-    ) -> Result<(), TerminalClassification> {
+    fn record(&mut self, event: JournalEvent) -> Result<(), TerminalClassification> {
         if self.journal.try_append(event).is_ok() {
             Ok(())
         } else {
@@ -971,9 +970,7 @@ pub fn run_beeper_lifecycle<T: LogicalTransport + PhasedTransport + AuditAccess>
 /// Supplying a journal returned by [`Journal::open`] makes every lifecycle checkpoint and
 /// write-ahead event durable under that journal's byte bound. The established
 /// [`run_beeper_lifecycle`] convenience API remains an in-memory simulation.
-pub fn run_beeper_lifecycle_with_journal<
-    T: LogicalTransport + PhasedTransport + AuditAccess,
->(
+pub fn run_beeper_lifecycle_with_journal<T: LogicalTransport + PhasedTransport + AuditAccess>(
     target: ExecutionTarget,
     goal: SystemInitBeeperGoal,
     transport: T,
@@ -984,13 +981,7 @@ pub fn run_beeper_lifecycle_with_journal<
     match Executor::new_simulation(target) {
         Ok(executor) => {
             let mut engine = Engine::new(
-                target,
-                goal,
-                transport,
-                executor,
-                case_meta,
-                approvals,
-                journal,
+                target, goal, transport, executor, case_meta, approvals, journal,
             );
             let terminal = engine.drive();
             engine.into_report(terminal)
@@ -1587,8 +1578,7 @@ mod tests {
             "Rebooted",
             "Reconnected",
             "Verified",
-        ]
-        {
+        ] {
             assert!(
                 checkpoint_iter.any(|checkpoint| checkpoint.contains(name)),
                 "checkpoint subsequence should contain {name}",
@@ -2409,9 +2399,7 @@ mod tests {
         let transient_ahead = report
             .checkpoints
             .iter()
-            .position(|event| {
-                event.contains("WriteAhead") && event.contains("TransientConfig")
-            })
+            .position(|event| event.contains("WriteAhead") && event.contains("TransientConfig"))
             .unwrap();
         let transient_done = report
             .checkpoints
@@ -2421,9 +2409,7 @@ mod tests {
         let save_ahead = report
             .checkpoints
             .iter()
-            .position(|event| {
-                event.contains("WriteAhead") && event.contains("PersistentConfig")
-            })
+            .position(|event| event.contains("WriteAhead") && event.contains("PersistentConfig"))
             .unwrap();
         let save_done = report
             .checkpoints
@@ -2487,8 +2473,7 @@ mod tests {
         ] {
             journal.append(event);
         }
-        let responder =
-            FaultInjector::new(MockFc::new(snapshot(DESIRED)), 0, Fault::Timeout);
+        let responder = FaultInjector::new(MockFc::new(snapshot(DESIRED)), 0, Fault::Timeout);
         let report = resume_beeper_lifecycle(
             ExecutionTarget::Mock,
             MockTransport::new(responder, InMemoryAudit::new()),

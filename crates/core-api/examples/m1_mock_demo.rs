@@ -3,8 +3,7 @@
 //! Executable M1 demonstration over project-owned simulation components only.
 
 use ade_core_api::{
-    CaseMetadata, REPORT_MARKERS, SimulationApprovals, TerminalClassification,
-    run_beeper_lifecycle,
+    CaseMetadata, REPORT_MARKERS, SimulationApprovals, TerminalClassification, run_beeper_lifecycle,
 };
 use ade_mock_fc::MockFc;
 use ade_planning::SystemInitBeeperGoal;

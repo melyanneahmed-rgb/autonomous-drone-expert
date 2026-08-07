@@ -1012,10 +1012,7 @@ mod tests {
         replay.enter_operational();
         mock_clock.advance(5);
         replay_clock.advance(5);
-        assert_eq!(
-            mock.exchange(&frame),
-            Err(TransportError::DeadlineExceeded)
-        );
+        assert_eq!(mock.exchange(&frame), Err(TransportError::DeadlineExceeded));
         assert_eq!(
             replay.exchange(&frame),
             Err(TransportError::DeadlineExceeded)
