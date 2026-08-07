@@ -16,14 +16,19 @@
     "path": "src/main/msp/msp_protocol.h",
     "url": "https://raw.githubusercontent.com/betaflight/betaflight/4.5.5/src/main/msp/msp_protocol.h",
     "retrieved_at": "2026-08-05",
-    "retrieved_by": "m0-foundation-batch"
+    "retrieved_by": "m0-foundation-batch",
+    "resolved_commit": "4adbd3ef7cb546947600e5f747bd5453c9573063"
   },
-  "payload_layout": null,
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": null,
+    "note": "Out/reply, VARIABLE length, in order: board_identifier (ASCII[4]); hardware_revision (u16); fc_type (u8, 0=FC / 2=FC+OSD); target_capabilities (u8 bitfield); target_name_length (u8) then target_name (ASCII[len]); board_name_length (u8) then board_name (ASCII[len]); manufacturer_id_length (u8) then manufacturer_id (ASCII[len]); signature (32 bytes). Then the fields appended in later API versions, still part of API 1.46: mcu_type_id (u8, getMcuTypeId, API 1.35+); configuration_state (u8, API 1.42); gyro_sample_rate_hz (u16 LE, API 1.43, informational); configuration_problems (u32 LE, API 1.43, volatile runtime warnings); spi_device_count (u8, API 1.44); i2c_device_count (u8, API 1.44). Every length prefix MUST be validated before reading; a bounded parser must never read past the frame and, since M1 pins API 1.46, must consume the FULL payload and reject both truncation and any undocumented trailing tail. SIGNATURE_LENGTH=32. The per-unit signature is parsed to consume the payload but is NOT used as a stable identity and is never stored in the reconnection identity, backup or case record. src/main/msp/msp.c lines 642-747 (blob 804d1dd3c9ee55cb0995f92352bac6d50911c671); BOARD_IDENTIFIER_LENGTH msp_protocol.h 80; SIGNATURE_LENGTH pg/board.h 27 @4.5.5."
+  },
   "source_state": "PINNED_SOURCE_RECORDED",
-  "verification_state": "NOT_REPRODUCED",
+  "verification_state": "MOCK_EXERCISED",
   "verification": {
-    "method": "Reproduce against ade-mock-fc, then observe on a real board running Betaflight 4.5.5 once the hardware-write gate and bench unit exist.",
-    "mock_exercised_at": null,
+    "method": "Encoded/decoded by ade-protocol-msp round-trip tests built from the same pinned records. MOCK_EXERCISED checks our codec's internal consistency only; it is not independent evidence about hardware.",
+    "mock_exercised_at": "2026-08-06",
     "hardware_observed_at": null
   },
   "licensing": {

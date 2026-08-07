@@ -1,9 +1,8 @@
-# Structural Cargo workspace for the foundation batch.
+# Cargo workspace for the independent Rust core.
 #
-# There are intentionally NO dependencies in this workspace. Every crate below is a
-# placeholder that establishes module boundaries and ownership only. Adding any
-# dependency requires its own reviewed pull request together with cargo-deny
-# enforcement (see deny.toml and docs/m0/foundations-gate.md).
+# M1 uses first-party workspace path dependencies only. External production dependencies
+# remain prohibited and are checked by ADR-0009 policy plus cargo-deny. Each crate keeps a
+# narrow ownership boundary; adding any external dependency requires a dedicated audit.
 
 [workspace]
 resolver = "3"

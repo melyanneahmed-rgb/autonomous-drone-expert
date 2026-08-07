@@ -5,6 +5,12 @@ version = 4
 [[package]]
 name = "ade-backup"
 version = "0.0.0"
+dependencies = [
+ "ade-facts",
+ "ade-protocol-msp",
+ "ade-safety",
+ "ade-transport",
+]
 
 [[package]]
 name = "ade-capability"
@@ -13,30 +19,72 @@ version = "0.0.0"
 [[package]]
 name = "ade-casebook"
 version = "0.0.0"
+dependencies = [
+ "ade-backup",
+ "ade-facts",
+ "ade-safety",
+]
 
 [[package]]
 name = "ade-core-api"
 version = "0.0.0"
+dependencies = [
+ "ade-backup",
+ "ade-capability",
+ "ade-casebook",
+ "ade-execution",
+ "ade-facts",
+ "ade-fault-injection",
+ "ade-mock-fc",
+ "ade-planning",
+ "ade-protocol-msp",
+ "ade-recovery",
+ "ade-safety",
+ "ade-session",
+ "ade-transport",
+]
 
 [[package]]
 name = "ade-execution"
 version = "0.0.0"
+dependencies = [
+ "ade-facts",
+ "ade-mock-fc",
+ "ade-protocol-msp",
+ "ade-safety",
+ "ade-session",
+ "ade-transport",
+]
 
 [[package]]
 name = "ade-facts"
 version = "0.0.0"
+dependencies = [
+ "ade-protocol-msp",
+]
 
 [[package]]
 name = "ade-fault-injection"
 version = "0.0.0"
+dependencies = [
+ "ade-transport",
+]
 
 [[package]]
 name = "ade-mock-fc"
 version = "0.0.0"
+dependencies = [
+ "ade-protocol-msp",
+ "ade-transport",
+]
 
 [[package]]
 name = "ade-planning"
 version = "0.0.0"
+dependencies = [
+ "ade-protocol-msp",
+ "ade-safety",
+]
 
 [[package]]
 name = "ade-protocol-cli"
@@ -49,6 +97,16 @@ version = "0.0.0"
 [[package]]
 name = "ade-recovery"
 version = "0.0.0"
+dependencies = [
+ "ade-backup",
+ "ade-casebook",
+ "ade-execution",
+ "ade-facts",
+ "ade-protocol-msp",
+ "ade-safety",
+ "ade-session",
+ "ade-transport",
+]
 
 [[package]]
 name = "ade-safety"
@@ -57,10 +115,16 @@ version = "0.0.0"
 [[package]]
 name = "ade-session"
 version = "0.0.0"
+dependencies = [
+ "ade-safety",
+]
 
 [[package]]
 name = "ade-transport"
 version = "0.0.0"
+dependencies = [
+ "ade-protocol-msp",
+]
 
 [[package]]
 name = "ade-transport-dfu"

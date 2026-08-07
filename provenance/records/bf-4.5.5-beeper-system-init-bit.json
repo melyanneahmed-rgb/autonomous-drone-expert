@@ -1,0 +1,36 @@
+{
+  "record_id": "bf-4.5.5-beeper-system-init-bit",
+  "kind": "setting",
+  "name": "beeper_off_flags.SYSTEM_INIT",
+  "value": 65536,
+  "firmware": {
+    "family": "Betaflight",
+    "version": "4.5.5",
+    "msp_api_version": "1.46"
+  },
+  "source": {
+    "type": "upstream_firmware_source_read",
+    "repository": "betaflight/betaflight",
+    "ref_kind": "tag",
+    "ref": "4.5.5",
+    "path": "src/main/io/beeper.h",
+    "url": "https://raw.githubusercontent.com/betaflight/betaflight/4.5.5/src/main/io/beeper.h",
+    "retrieved_at": "2026-08-06",
+    "retrieved_by": "m1-beeper-mock-replay-batch",
+    "resolved_commit": "4adbd3ef7cb546947600e5f747bd5453c9573063",
+    "blob_sha": "38e6c8a8c42bbf5a49e366933253467889a3d4a8"
+  },
+  "payload_layout": null,
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "NOT_REPRODUCED",
+  "verification": {
+    "method": "Exercised by the beeper bit-delta planner and mock-fc tests in a later M1 commit; observed on hardware only after the write gate and a bench unit exist.",
+    "mock_exercised_at": null,
+    "hardware_observed_at": null
+  },
+  "licensing": {
+    "copied_material": false,
+    "note": "Bit position and mask direction restated from a pinned source; no code, comments, tables or fixtures copied."
+  },
+  "notes": "BEEPER_GET_FLAG(mode) = (1 << (mode - 1)) at src/main/io/beeper.h line 25 (blob 38e6c8a8...). beeperMode_e (beeper.h lines 35-65): BEEPER_SILENCE=0 ... BEEPER_SYSTEM_INIT is the 18th enumerator (ordinal 17) -> bit index 16 -> mask 1<<16 = 0x00010000. Direction: a SET bit DISABLES the condition, a CLEAR bit ALLOWS it (src/main/io/beeper.c line 420 plays only when !(beeper_off_flags & flag)). Resolved commit 4adbd3ef7cb546947600e5f747bd5453c9573063 @ tag 4.5.5."
+}

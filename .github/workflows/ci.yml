@@ -1,10 +1,11 @@
 # Foundation CI.
+# Repository Actions policy intentionally allow-lists actions/checkout@v7.0.1 only.
 #
-# Scope note (honesty): these gates cover only what this repository actually contains
-# today -- a structural workspace with zero dependencies, documentation, provenance
-# records and policy scripts. Gates for Tauri, React, Vitest, Playwright, cargo-fuzz,
-# property tests, serial/USB/DFU, hardware and release publishing are deliberately
-# absent and are added in the same pull requests that introduce those components.
+# Scope note (honesty): these gates cover the M0 policy foundation and the M1 Mock/Replay
+# Rust slice with first-party workspace path dependencies only. Gates for Tauri, React,
+# Vitest, Playwright, serial/USB/DFU, hardware and release publishing are deliberately
+# absent and are added with those components. M1 line/branch coverage is fail-closed for
+# the five critical lifecycle files.
 #
 # Action pinning: actions are pinned to an exact release tag. Pinning to a commit SHA
 # could not be completed in the environment that authored this file, because the GitHub
@@ -15,20 +16,26 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Keep the protected branch gate and provide a direct validation path for
+    # the active M1 branch while pull-request event delivery is being repaired.
+    branches: [main, feature/m1-beeper-mock-replay, continuation/m1-acceptance-hardening]
   pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# Collapse duplicate push/pull_request delivery for the same revision and cancel stale work.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
   policy-gates:
     name: policy-gates
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -54,6 +61,7 @@ jobs:
   rust-linux:
     name: rust-linux
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -72,10 +80,14 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      - name: Non-hardware M1 demonstration
+        run: cargo run -p ade-core-api --example m1_mock_demo
 
   rust-windows:
     name: rust-windows
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -94,6 +106,9 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      - name: Non-hardware M1 demonstration
+        run: cargo run -p ade-core-api --example m1_mock_demo
 
   rust-msrv:
     # Proves that the declared MSRV is real and not decorative: the workspace is checked
@@ -102,6 +117,7 @@ jobs:
     # `+1.85.0` overrides that pin for this job only.
     name: rust-msrv
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -118,3 +134,56 @@ jobs:
 
       - name: Check workspace against declared MSRV
         run: cargo +1.85.0 check --workspace --all-targets
+
+  cargo-deny:
+    # Supply-chain gate for the dependency policy (ADR-0009). The workspace may now carry
+    # first-party workspace path dependencies; EXTERNAL production dependencies remain
+    # prohibited. cargo-deny is a real required check here -- never advisory-only, never
+    # continue-on-error. The version is the one already pinned and reviewed for the Windows
+    # spike; changing it is a dedicated pull request.
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Report pinned toolchain
+        run: cargo --version
+
+      - name: Install cargo-deny (pinned, locked)
+        run: cargo install --locked cargo-deny@0.20.2
+
+      - name: Advisories, bans, licenses and sources
+        run: |
+          cargo deny check advisories
+          cargo deny check bans
+          cargo deny check licenses
+          cargo deny check sources
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Branch counters are still an unstable rustc coverage option. This is confined to
+      # the exact pinned coverage build; product and MSRV builds remain stable Rust.
+      RUSTC_BOOTSTRAP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Report pinned toolchain
+        run: |
+          cargo --version
+          rustc --version
+
+      - name: Install LLVM tools and pinned coverage driver
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install --locked cargo-llvm-cov@0.8.7
+
+      - name: Measure line and branch coverage
+        run: |
+          cargo llvm-cov --workspace --all-targets --branch --json --output-path coverage.json
+          python3 scripts/check_coverage.py coverage.json

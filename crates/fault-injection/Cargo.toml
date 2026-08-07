@@ -6,5 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
-# No dependencies. Adding one requires its own reviewed pull request.
+# First-party workspace path dependency only (ADR-0009).
 [dependencies]
+ade-transport = { path = "../transport" }

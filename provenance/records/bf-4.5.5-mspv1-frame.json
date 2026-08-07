@@ -1,0 +1,40 @@
+{
+  "record_id": "bf-4.5.5-mspv1-frame",
+  "kind": "behaviour",
+  "name": "MSPv1 serial frame",
+  "value": null,
+  "firmware": {
+    "family": "Betaflight",
+    "version": "4.5.5",
+    "msp_api_version": "1.46"
+  },
+  "source": {
+    "type": "upstream_firmware_source_read",
+    "repository": "betaflight/betaflight",
+    "ref_kind": "tag",
+    "ref": "4.5.5",
+    "path": "src/main/msp/msp_serial.c",
+    "url": "https://raw.githubusercontent.com/betaflight/betaflight/4.5.5/src/main/msp/msp_serial.c",
+    "retrieved_at": "2026-08-06",
+    "retrieved_by": "m1-beeper-mock-replay-batch",
+    "resolved_commit": "4adbd3ef7cb546947600e5f747bd5453c9573063",
+    "blob_sha": "07718b57a58088e297e7bfe5972bf606b5414e1e"
+  },
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": null,
+    "note": "MSPv1 serial frame, in order: '$' (0x24); 'M' (0x4D); a direction byte '<' (0x3C, request to the FC) / '>' (0x3E, normal reply) / '!' (0x21, error reply); size (u8 = payload length); command (u8); payload[size]; checksum (u8). The checksum is the XOR of the size byte, the command byte and every payload byte (V1_CHECKSUM_STARTPOS = 3: the checksum starts at the size byte, after '$','M',direction). Multi-byte payload integers are little-endian."
+  },
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "MOCK_EXERCISED",
+  "verification": {
+    "method": "Encoded and decoded by ade-protocol-msp frame round-trip and malformed-input tests. MOCK_EXERCISED checks our codec only.",
+    "mock_exercised_at": "2026-08-06",
+    "hardware_observed_at": null
+  },
+  "licensing": {
+    "copied_material": false,
+    "note": "Frame structure and checksum rule restated independently; no upstream code, comments, tables or fixtures copied."
+  },
+  "notes": "Encoder src/main/msp/msp_serial.c lines 319-349; decoder lines 128-213 (blob 07718b57...). Little-endian from src/main/common/streambuf.c lines 40-52 (blob 74fdf2a0...). Resolved commit 4adbd3ef7cb546947600e5f747bd5453c9573063 @ tag 4.5.5."
+}

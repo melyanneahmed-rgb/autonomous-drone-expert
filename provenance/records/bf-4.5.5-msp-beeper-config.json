@@ -16,19 +16,24 @@
     "path": "src/main/msp/msp_protocol.h",
     "url": "https://raw.githubusercontent.com/betaflight/betaflight/4.5.5/src/main/msp/msp_protocol.h",
     "retrieved_at": "2026-08-05",
-    "retrieved_by": "m0-foundation-batch"
+    "retrieved_by": "m0-foundation-batch",
+    "resolved_commit": "4adbd3ef7cb546947600e5f747bd5453c9573063"
   },
-  "payload_layout": null,
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": 9,
+    "note": "Out/reply, 9 bytes, little-endian: [0..3]=beeper_off_flags (u32); [4]=dshot_beacon_tone (u8); [5..8]=dshot_beacon_off_flags (u32). src/main/msp/msp.c lines 782-786 (blob 804d1dd3c9ee55cb0995f92352bac6d50911c671); little-endian common/streambuf.c 40-52 @4.5.5."
+  },
   "source_state": "PINNED_SOURCE_RECORDED",
-  "verification_state": "NOT_REPRODUCED",
+  "verification_state": "MOCK_EXERCISED",
   "verification": {
-    "method": "Reproduce against ade-mock-fc, then observe on a real board running Betaflight 4.5.5 once the hardware-write gate and bench unit exist.",
-    "mock_exercised_at": null,
+    "method": "Encoded/decoded by ade-protocol-msp round-trip tests built from the same pinned records. MOCK_EXERCISED checks our codec's internal consistency only; it is not independent evidence about hardware.",
+    "mock_exercised_at": "2026-08-06",
     "hardware_observed_at": null
   },
   "licensing": {
     "copied_material": false,
     "note": "Numeric interface constant read from a published pinned source and restated. No code, comments, tables, fixtures or error strings were copied."
   },
-  "notes": "Target of the first vertical slice (ADR-0006). Payload layout and beeper mask semantics are NOT recorded and must not be assumed."
+  "notes": "First vertical-slice target (ADR-0006); read layout now documented."
 }
