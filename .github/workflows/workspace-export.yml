@@ -1,0 +1,32 @@
+name: Temporary workspace export
+
+on:
+  push:
+    branches:
+      - continuation/m1-acceptance-hardening
+    paths:
+      - .github/workflows/workspace-export.yml
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Export tracked source once
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=tar "$GITHUB_SHA" | gzip -n -9 | base64 -w0 > .workspace-export.b64
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .workspace-export.b64
+          git commit -m "chore: temporary workspace export"
+          git push origin "HEAD:$GITHUB_REF_NAME"
