@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
-//! # `ade-planning` — the M1 beeper change plan
+//! # `ade-planning` — product goals and the M1 beeper change plan
 //!
-//! Builds the single typed plan of the M1 vertical slice: flip exactly the
+//! [`product`] fixes the user/program responsibility boundary for every future plan. It is
+//! descriptive only: it cannot emit protocol frames or authorise writes. The existing M1
+//! implementation builds the single typed beeper plan: flip exactly the
 //! `BEEPER_SYSTEM_INIT` bit of `beeper_off_flags`, or prove that nothing needs to change
 //! (an explicit no-op plan). The plan carries the full initial snapshot, the exact intended
 //! delta, the ordered steps with their [`WriteCommandClass`] and [`RecoveryClass`], the
@@ -10,6 +12,8 @@
 //!
 //! A plan whose delta touches any bit other than the intended mask is rejected — there is no
 //! way to smuggle a wider change through this planner.
+
+pub mod product;
 
 use ade_protocol_msp::{BeeperConfigSnapshot, SYSTEM_INIT_OFF_MASK};
 use ade_safety::{RecoveryClass, WriteCommandClass};
