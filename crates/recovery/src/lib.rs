@@ -69,6 +69,8 @@ impl RecoveryApprovals {
 /// The stage at which a recovery failed, for the report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryStage {
+    /// Durable journal evidence could not be written before/after a recovery action.
+    Journal,
     /// Re-identification before any recovery write.
     ReIdentify,
     /// The re-identified device is not the one the backup belongs to.
@@ -149,7 +151,6 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
     journal: &mut Journal,
     approvals: &RecoveryApprovals,
 ) -> RecoveryResult {
-    journal.append(JournalEvent::RecoveryStarted);
     let state = SessionState::Recovering;
     let mut evidence = RecoveryEvidence {
         identity_reproven: false,
@@ -161,9 +162,15 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
     };
     let fail = |mut e: RecoveryEvidence, stage, journal: &mut Journal| {
         e.failed_stage = Some(stage);
-        journal.append(JournalEvent::StateUnknown);
+        let _ = journal.try_append(JournalEvent::StateUnknown);
         RecoveryResult::StateUnknown(e)
     };
+    if journal
+        .try_append(JournalEvent::RecoveryStarted)
+        .is_err()
+    {
+        return fail(evidence, RecoveryStage::Journal, journal);
+    }
 
     // 1. Re-prove identity before anything else. No write happens before this point.
     transport.begin_identification();
@@ -190,11 +197,22 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
     if current.beeper_off_flags == backup.restore_value() && dshot_matches(&current, backup) {
         evidence.verified_in_place = true;
         evidence.final_snapshot = Some(current);
-        journal.append(JournalEvent::Restored);
+        if journal.try_append(JournalEvent::Restored).is_err() {
+            return fail(evidence, RecoveryStage::Journal, journal);
+        }
         return RecoveryResult::Restored(evidence);
     }
 
     // 4. Restore the previous value with the exact four-byte SET.
+    if journal
+        .try_append(JournalEvent::WriteAhead {
+            class: WriteCommandClass::TransientConfig,
+            recovery: RecoveryClass::RestoreFromBackupSupported,
+        })
+        .is_err()
+    {
+        return fail(evidence, RecoveryStage::Journal, journal);
+    }
     if executor
         .write(
             transport,
@@ -206,6 +224,15 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
         .is_err()
     {
         return fail(evidence, RecoveryStage::RestoreSet, journal);
+    }
+    if journal
+        .try_append(JournalEvent::TransientWriteApplied {
+            field: "beeper_off_flags",
+            mask: backup.desired_delta.mask,
+        })
+        .is_err()
+    {
+        return fail(evidence, RecoveryStage::Journal, journal);
     }
 
     // 5. Re-read before the recovery save.
@@ -219,8 +246,23 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
     if !dshot_matches(&reread, backup) {
         return fail(evidence, RecoveryStage::DshotMismatch, journal);
     }
+    if journal
+        .try_append(JournalEvent::ReReadBeforeSave)
+        .is_err()
+    {
+        return fail(evidence, RecoveryStage::Journal, journal);
+    }
 
     // 6. Save, 7. reboot — both under their declared recovery classes.
+    if journal
+        .try_append(JournalEvent::WriteAhead {
+            class: WriteCommandClass::PersistentConfig,
+            recovery: RecoveryClass::RestoreFromBackupSupported,
+        })
+        .is_err()
+    {
+        return fail(evidence, RecoveryStage::Journal, journal);
+    }
     if executor
         .write(
             transport,
@@ -233,6 +275,18 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
     {
         return fail(evidence, RecoveryStage::Save, journal);
     }
+    if journal.try_append(JournalEvent::Saved).is_err() {
+        return fail(evidence, RecoveryStage::Journal, journal);
+    }
+    if journal
+        .try_append(JournalEvent::WriteAhead {
+            class: WriteCommandClass::Reboot,
+            recovery: RecoveryClass::ManualRecoveryRequired,
+        })
+        .is_err()
+    {
+        return fail(evidence, RecoveryStage::Journal, journal);
+    }
     if executor
         .write(
             transport,
@@ -244,6 +298,9 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
         .is_err()
     {
         return fail(evidence, RecoveryStage::Reboot, journal);
+    }
+    if journal.try_append(JournalEvent::Rebooted).is_err() {
+        return fail(evidence, RecoveryStage::Journal, journal);
     }
 
     // 8. Reconnect and re-prove identity again.
@@ -272,7 +329,9 @@ pub fn run_restore<T: LogicalTransport + PhasedTransport>(
     {
         return fail(evidence, RecoveryStage::FinalVerify, journal);
     }
-    journal.append(JournalEvent::Restored);
+    if journal.try_append(JournalEvent::Restored).is_err() {
+        return fail(evidence, RecoveryStage::Journal, journal);
+    }
     RecoveryResult::Restored(evidence)
 }
 

@@ -7,19 +7,18 @@ that run Betaflight or INAV firmware.
 
 ## Status
 
-**Foundation stage. There is no production release, no working application, and no usable
-functionality in this repository yet.**
+**M1 acceptance candidate: simulation only, not a production release and not hardware
+validated.**
 
-This repository currently contains only:
+M0 foundations are complete. The current M1 candidate implements one deliberately narrow
+vertical slice for the Betaflight 4.5.5 `SYSTEM_INIT` beeper bit over project-owned Mock and
+Replay transports: Identify → Read → Plan → Backup → Write → Save → Reboot → Reconnect →
+Verify → Recovery/Report. It includes injected failure coverage, durable local journal
+evidence and fail-closed resume handling.
 
-- the approved foundational document and M0 gate records,
-- architecture decision records (ADRs),
-- an empty structural Rust workspace (no logic, no dependencies),
-- source-provenance records and policy,
-- CI policy gates.
-
-Nothing here talks to hardware. No flight controller has ever been connected, written to,
-or flashed by this project.
+There is still no serial/USB production transport, UI, firmware flashing, motor control or
+hardware-support claim. No flight controller has been contacted, written to or flashed by
+this project. See `docs/m1/README.md` for the exact acceptance boundary.
 
 ## What this project is
 
@@ -57,6 +56,7 @@ lifecycle. It does not depend on, import from, or share code with any other repo
 | Architecture decisions | `docs/adr/` |
 | Source provenance policy | `provenance/README.md` |
 | Hardware support matrix | `docs/hardware-support-matrix/README.md` |
+| M1 simulation acceptance candidate | `docs/m1/README.md` |
 
 ## Licensing
 

@@ -19,6 +19,9 @@
 //!   [`AuditDisposition::BlockedNotSent`], metadata only.
 
 use ade_protocol_msp::{CommandId, Direction, MspError, decode_frame};
+use std::cell::Cell;
+use std::fmt;
+use std::rc::Rc;
 
 /// Errors surfaced by a logical transport. Structural only — never raw payload content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +36,10 @@ pub enum TransportError {
     Disconnected,
     /// A read timed out.
     Timeout,
+    /// The caller cancelled the operation before it reached the responder/transcript.
+    Cancelled,
+    /// The injected monotonic deadline elapsed before the operation.
+    DeadlineExceeded,
     /// No reply was produced for a request.
     NoReply,
     /// A frame could not be decoded.
@@ -60,6 +67,119 @@ pub enum Phase {
     Identifying,
     /// Normal operation; writes are permitted (subject to the safety gate elsewhere).
     Operational,
+}
+
+/// Injected monotonic time source used by deterministic simulation transports.
+///
+/// The transport never sleeps and never reads wall-clock time. Tests can move a
+/// [`ManualClock`] explicitly and obtain identical Mock/Replay decisions.
+pub trait Clock: fmt::Debug {
+    /// Current monotonic time in milliseconds.
+    fn now_ms(&self) -> u64;
+}
+
+/// Injected cancellation state used by deterministic simulation transports.
+pub trait CancellationToken: fmt::Debug {
+    /// Whether the current operation must stop before sending.
+    fn is_cancelled(&self) -> bool;
+}
+
+/// Cloneable manual clock for simulations and tests.
+#[derive(Debug, Default, Clone)]
+pub struct ManualClock {
+    now_ms: Rc<Cell<u64>>,
+}
+
+impl ManualClock {
+    /// Create a clock at a caller-supplied monotonic instant.
+    #[must_use]
+    pub fn new(now_ms: u64) -> Self {
+        Self {
+            now_ms: Rc::new(Cell::new(now_ms)),
+        }
+    }
+
+    /// Move the clock forward without sleeping.
+    pub fn advance(&self, delta_ms: u64) {
+        self.now_ms.set(self.now_ms.get().saturating_add(delta_ms));
+    }
+
+    /// Set an exact monotonic instant.
+    pub fn set(&self, now_ms: u64) {
+        self.now_ms.set(now_ms);
+    }
+}
+
+impl Clock for ManualClock {
+    fn now_ms(&self) -> u64 {
+        self.now_ms.get()
+    }
+}
+
+/// Cloneable cancellation flag for simulations and tests.
+#[derive(Debug, Default, Clone)]
+pub struct CancellationFlag {
+    cancelled: Rc<Cell<bool>>,
+}
+
+impl CancellationFlag {
+    /// Mark subsequent operations cancelled.
+    pub fn cancel(&self) {
+        self.cancelled.set(true);
+    }
+
+    /// Clear cancellation for a new deterministic test step.
+    pub fn reset(&self) {
+        self.cancelled.set(false);
+    }
+}
+
+impl CancellationToken for CancellationFlag {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.get()
+    }
+}
+
+#[derive(Debug)]
+struct TransportControl {
+    clock: Box<dyn Clock>,
+    cancellation: Box<dyn CancellationToken>,
+    deadline_ms: Option<u64>,
+}
+
+impl TransportControl {
+    fn unbounded() -> Self {
+        Self {
+            clock: Box::new(ManualClock::default()),
+            cancellation: Box::new(CancellationFlag::default()),
+            deadline_ms: None,
+        }
+    }
+
+    fn injected(
+        clock: impl Clock + 'static,
+        cancellation: impl CancellationToken + 'static,
+        deadline_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            clock: Box::new(clock),
+            cancellation: Box::new(cancellation),
+            deadline_ms,
+        }
+    }
+
+    fn check(&self) -> Result<(), TransportError> {
+        if self.cancellation.is_cancelled() {
+            return Err(TransportError::Cancelled);
+        }
+        if self
+            .deadline_ms
+            .is_some_and(|deadline| self.clock.now_ms() >= deadline)
+        {
+            return Err(TransportError::DeadlineExceeded);
+        }
+        Ok(())
+    }
 }
 
 /// Whether a command mutates the device or requests a reboot (i.e. is not a pure read).
@@ -224,6 +344,7 @@ pub struct MockTransport<R: FrameResponder, A: AuditSink> {
     audit: A,
     phase: Phase,
     open: bool,
+    control: TransportControl,
 }
 
 impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
@@ -234,6 +355,25 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
             audit,
             phase: Phase::Identifying,
             open: false,
+            control: TransportControl::unbounded(),
+        }
+    }
+
+    /// Build a mock transport with injected time, cancellation and an optional absolute
+    /// monotonic deadline.
+    pub fn new_with_control(
+        responder: R,
+        audit: A,
+        clock: impl Clock + 'static,
+        cancellation: impl CancellationToken + 'static,
+        deadline_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            responder,
+            audit,
+            phase: Phase::Identifying,
+            open: false,
+            control: TransportControl::injected(clock, cancellation, deadline_ms),
         }
     }
 
@@ -270,6 +410,7 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
 
 impl<R: FrameResponder, A: AuditSink> LogicalTransport for MockTransport<R, A> {
     fn open(&mut self) -> Result<(), TransportError> {
+        self.control.check()?;
         self.open = true;
         Ok(())
     }
@@ -278,6 +419,7 @@ impl<R: FrameResponder, A: AuditSink> LogicalTransport for MockTransport<R, A> {
         if !self.open {
             return Err(TransportError::NotOpen);
         }
+        self.control.check()?;
         self.guard_and_audit(request)?;
         self.responder.respond(request)
     }
@@ -342,6 +484,7 @@ pub struct ReplayTransport<A: AuditSink> {
     phase: Phase,
     open: bool,
     divergence: Option<Divergence>,
+    control: TransportControl,
 }
 
 impl<A: AuditSink> ReplayTransport<A> {
@@ -354,6 +497,27 @@ impl<A: AuditSink> ReplayTransport<A> {
             phase: Phase::Identifying,
             open: false,
             divergence: None,
+            control: TransportControl::unbounded(),
+        }
+    }
+
+    /// Build a replay transport with injected time, cancellation and an optional absolute
+    /// monotonic deadline.
+    pub fn new_with_control(
+        steps: Vec<ReplayStep>,
+        audit: A,
+        clock: impl Clock + 'static,
+        cancellation: impl CancellationToken + 'static,
+        deadline_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            steps,
+            cursor: 0,
+            audit,
+            phase: Phase::Identifying,
+            open: false,
+            divergence: None,
+            control: TransportControl::injected(clock, cancellation, deadline_ms),
         }
     }
 
@@ -397,6 +561,7 @@ impl<A: AuditSink> ReplayTransport<A> {
 
 impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
     fn open(&mut self) -> Result<(), TransportError> {
+        self.control.check()?;
         self.open = true;
         Ok(())
     }
@@ -405,6 +570,7 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
         if !self.open {
             return Err(TransportError::NotOpen);
         }
+        self.control.check()?;
         let entry = audit_entry_for(request)?;
         if matches!(self.phase, Phase::Identifying) {
             if let Some(error) = identify_refusal(entry.command) {
@@ -418,9 +584,11 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
             }
         }
         if self.cursor >= self.steps.len() {
+            self.audit.record(entry);
             return Err(self.record_divergence(TransportError::ReplayExhausted));
         }
         if self.steps[self.cursor].expected_request != request {
+            self.audit.record(entry);
             // Distinguish "wrong frame entirely" from "a later-expected frame arrived early".
             let appears_later = self.steps[self.cursor + 1..]
                 .iter()
@@ -758,5 +926,125 @@ mod tests {
         }
         assert!(t.is_complete());
         assert!(t.divergence().is_none());
+    }
+
+    #[derive(Clone)]
+    struct InjectedError(TransportError);
+
+    impl FrameResponder for InjectedError {
+        fn respond(&mut self, _request: &[u8]) -> Result<Vec<u8>, TransportError> {
+            Err(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn mock_and_replay_preserve_error_and_audit_parity_for_26_failures() {
+        let errors = [
+            TransportError::PortBusy,
+            TransportError::PermissionDenied,
+            TransportError::MissingDriver,
+            TransportError::Disconnected,
+            TransportError::Timeout,
+            TransportError::NoReply,
+            TransportError::Malformed(MspError::BadPreamble),
+            TransportError::WriteDuringIdentify(CommandId::SetBeeperConfig.as_u8()),
+            TransportError::CommandNotAllowedDuringIdentify(CommandId::BeeperConfig.as_u8()),
+            TransportError::UnexpectedFrame,
+            TransportError::OrderMismatch,
+            TransportError::ReplayExhausted,
+            TransportError::DeadlineExceeded,
+        ];
+        let frames = [read_frame(), write_frame()];
+        let mut cases = 0;
+        for error in errors {
+            for frame in &frames {
+                let mut mock =
+                    MockTransport::new(InjectedError(error.clone()), InMemoryAudit::new());
+                let mut replay = ReplayTransport::new(
+                    vec![ReplayStep {
+                        expected_request: frame.clone(),
+                        response: ReplayResponse::Injected(error.clone()),
+                    }],
+                    InMemoryAudit::new(),
+                );
+                mock.open().unwrap();
+                replay.open().unwrap();
+                mock.enter_operational();
+                replay.enter_operational();
+
+                assert_eq!(mock.exchange(frame), replay.exchange(frame), "case {cases}");
+                assert_eq!(
+                    mock.audit_entries(),
+                    replay.audit_entries(),
+                    "audit case {cases}"
+                );
+                cases += 1;
+            }
+        }
+        assert_eq!(cases, 26);
+    }
+
+    #[test]
+    fn injected_deadline_is_deterministic_and_never_sleeps() {
+        let mock_clock = ManualClock::new(5);
+        let replay_clock = ManualClock::new(5);
+        let frame = read_frame();
+        let mut mock = MockTransport::new_with_control(
+            EchoOk,
+            InMemoryAudit::new(),
+            mock_clock.clone(),
+            CancellationFlag::default(),
+            Some(10),
+        );
+        let mut replay = ReplayTransport::new_with_control(
+            vec![ReplayStep {
+                expected_request: frame.clone(),
+                response: ReplayResponse::Reply(vec![]),
+            }],
+            InMemoryAudit::new(),
+            replay_clock.clone(),
+            CancellationFlag::default(),
+            Some(10),
+        );
+        mock.open().unwrap();
+        replay.open().unwrap();
+        mock.enter_operational();
+        replay.enter_operational();
+        mock_clock.advance(5);
+        replay_clock.advance(5);
+        assert_eq!(
+            mock.exchange(&frame),
+            Err(TransportError::DeadlineExceeded)
+        );
+        assert_eq!(
+            replay.exchange(&frame),
+            Err(TransportError::DeadlineExceeded)
+        );
+        assert!(mock.audit_entries().is_empty());
+        assert!(replay.audit_entries().is_empty());
+    }
+
+    #[test]
+    fn injected_cancellation_prevents_open_on_both_transports() {
+        let mock_cancel = CancellationFlag::default();
+        let replay_cancel = CancellationFlag::default();
+        mock_cancel.cancel();
+        replay_cancel.cancel();
+        let mut mock = MockTransport::new_with_control(
+            EchoOk,
+            InMemoryAudit::new(),
+            ManualClock::default(),
+            mock_cancel,
+            None,
+        );
+        let mut replay = ReplayTransport::new_with_control(
+            Vec::new(),
+            InMemoryAudit::new(),
+            ManualClock::default(),
+            replay_cancel,
+            None,
+        );
+        assert_eq!(mock.open(), Err(TransportError::Cancelled));
+        assert_eq!(replay.open(), Err(TransportError::Cancelled));
     }
 }

@@ -108,6 +108,8 @@ pub enum ScopeStatus {
 /// The lifecycle stage at which a run failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureStage {
+    /// Durable lifecycle evidence could not be recorded or synced.
+    Journal,
     /// Opening the logical transport.
     Open,
     /// Initial identification.
@@ -367,9 +369,7 @@ pub const fn goal_from_backup(backup: &Backup) -> SystemInitBeeperGoal {
 
 fn contains_subsequence(events: &[JournalEvent], required: &[JournalEvent]) -> bool {
     let mut iter = events.iter();
-    required
-        .iter()
-        .all(|r| iter.any(|e| core::mem::discriminant(e) == core::mem::discriminant(r)))
+    required.iter().all(|required| iter.any(|event| event == required))
 }
 
 struct Engine<T> {
@@ -390,6 +390,7 @@ struct Engine<T> {
     recovery_attempted: bool,
     recovery_evidence: Option<RecoveryEvidence>,
     verification_evidence: Option<VerificationEvidence>,
+    write_may_have_occurred: bool,
 }
 
 impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
@@ -402,6 +403,15 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         approvals: SimulationApprovals,
         journal: Journal,
     ) -> Self {
+        let write_may_have_occurred = journal.events().iter().any(|event| {
+            matches!(
+                event,
+                JournalEvent::TransientWriteApplied { .. }
+                    | JournalEvent::Saved
+                    | JournalEvent::Rebooted
+                    | JournalEvent::WriteAhead { .. }
+            )
+        });
         Self {
             target,
             goal,
@@ -420,6 +430,7 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
             recovery_attempted: false,
             recovery_evidence: None,
             verification_evidence: None,
+            write_may_have_occurred,
         }
     }
 
@@ -451,6 +462,25 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
             .write(&mut self.transport, state, operation, approval, declared)
     }
 
+    fn journal_failure(&mut self) -> TerminalClassification {
+        if self.write_may_have_occurred {
+            self.recover(FailureStage::Journal)
+        } else {
+            self.abort_before_write(FailureStage::Journal)
+        }
+    }
+
+    fn record(
+        &mut self,
+        event: JournalEvent,
+    ) -> Result<(), TerminalClassification> {
+        if self.journal.try_append(event).is_ok() {
+            Ok(())
+        } else {
+            Err(self.journal_failure())
+        }
+    }
+
     /// Abort before any write reached the device: close, disconnect, classify honestly.
     fn abort_before_write(&mut self, stage: FailureStage) -> TerminalClassification {
         self.failure_stage = Some(stage);
@@ -466,7 +496,7 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         let Some(backup) = self.backup.clone() else {
             // No backup means no write was ever authorised; this path is unreachable after
             // a write, and without evidence the only honest terminal is state-unknown.
-            self.journal.append(JournalEvent::StateUnknown);
+            let _ = self.journal.try_append(JournalEvent::StateUnknown);
             self.tr(SessionState::StateUnknownRecoveryRequired);
             return TerminalClassification::StateUnknownRecoveryRequired;
         };
@@ -498,31 +528,45 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
     ) -> Result<(), TerminalClassification> {
         self.tr(SessionState::Connecting);
         if self.transport.open().is_err() {
+            if must_match.is_some() {
+                self.failure_stage = Some(FailureStage::ResumeIdentity);
+                let _ = self.journal.try_append(JournalEvent::StateUnknown);
+                self.tr(SessionState::StateUnknownRecoveryRequired);
+                return Err(TerminalClassification::StateUnknownRecoveryRequired);
+            }
             return Err(self.abort_before_write(FailureStage::Open));
         }
         self.tr(SessionState::Identifying);
         let identity = match self.identify_now() {
             Ok(identity) => identity,
+            Err(_) if must_match.is_some() => {
+                self.failure_stage = Some(FailureStage::ResumeIdentity);
+                let _ = self.journal.try_append(JournalEvent::StateUnknown);
+                self.tr(SessionState::StateUnknownRecoveryRequired);
+                return Err(TerminalClassification::StateUnknownRecoveryRequired);
+            }
             Err(_) => return Err(self.abort_before_write(FailureStage::Identify)),
         };
         if let Some(expected) = must_match {
             if identity.compare(expected) != IdentityMatch::Same {
                 self.failure_stage = Some(FailureStage::ResumeIdentity);
-                self.journal.append(JournalEvent::StateUnknown);
+                let _ = self.journal.try_append(JournalEvent::StateUnknown);
                 self.tr(SessionState::StateUnknownRecoveryRequired);
                 return Err(TerminalClassification::StateUnknownRecoveryRequired);
             }
         }
-        self.journal.append(JournalEvent::IdentityRead);
+        self.record(JournalEvent::IdentityRead)?;
         self.identity = Some(identity);
         Ok(())
     }
 
     /// The full fresh run.
     fn drive(&mut self) -> TerminalClassification {
-        self.journal.append(JournalEvent::Started {
+        if let Err(terminal) = self.record(JournalEvent::Started {
             execution_target: self.target,
-        });
+        }) {
+            return terminal;
+        }
         if let Err(terminal) = self.connect_and_identify(None) {
             return terminal;
         }
@@ -545,7 +589,9 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
             Ok(snapshot) => snapshot,
             Err(_) => return self.abort_before_write(FailureStage::SnapshotRead),
         };
-        self.journal.append(JournalEvent::SnapshotRead);
+        if let Err(terminal) = self.record(JournalEvent::SnapshotRead) {
+            return terminal;
+        }
         self.initial_snapshot = Some(snapshot.clone());
 
         // Plan.
@@ -565,7 +611,9 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
             if !evidence.matched {
                 return self.abort_before_write(FailureStage::VerifyMismatch);
             }
-            self.journal.append(JournalEvent::Verified);
+            if let Err(terminal) = self.record(JournalEvent::Verified) {
+                return terminal;
+            }
             self.tr(SessionState::Planning);
             return TerminalClassification::NoOpVerified;
         }
@@ -598,7 +646,9 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
             .checkpoints
             .push("backed-up-before-any-write".to_string());
         self.backup = Some(backup);
-        self.journal.append(JournalEvent::BackedUp);
+        if let Err(terminal) = self.record(JournalEvent::BackedUp) {
+            return terminal;
+        }
 
         self.tr(SessionState::ApplyingTransient);
         self.apply_and_finish(true)
@@ -610,6 +660,13 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
     fn apply_and_finish(&mut self, send_set: bool) -> TerminalClassification {
         let plan = self.plan.clone().expect("plan built before applying");
         if send_set {
+            if let Err(terminal) = self.record(JournalEvent::WriteAhead {
+                class: WriteCommandClass::TransientConfig,
+                recovery: RecoveryClass::TransientWritePendingReconcileOnResume,
+            }) {
+                return terminal;
+            }
+            self.write_may_have_occurred = true;
             let approval = self.approvals.transient.clone();
             if self
                 .write_now(
@@ -621,10 +678,12 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
             {
                 return self.recover(FailureStage::TransientWrite);
             }
-            self.journal.append(JournalEvent::TransientWriteApplied {
+            if let Err(terminal) = self.record(JournalEvent::TransientWriteApplied {
                 field: "beeper_off_flags",
                 mask: plan.system_init_mask,
-            });
+            }) {
+                return terminal;
+            }
         }
 
         // Re-read before the save, still in ApplyingTransient.
@@ -636,9 +695,18 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         if !evidence.matched {
             return self.recover(FailureStage::VerifyBeforeSave);
         }
-        self.journal.append(JournalEvent::ReReadBeforeSave);
+        if let Err(terminal) = self.record(JournalEvent::ReReadBeforeSave) {
+            return terminal;
+        }
 
         self.tr(SessionState::Saving);
+        if let Err(terminal) = self.record(JournalEvent::WriteAhead {
+            class: WriteCommandClass::PersistentConfig,
+            recovery: RecoveryClass::AutomaticRollbackSupported,
+        }) {
+            return terminal;
+        }
+        self.write_may_have_occurred = true;
         let approval = self.approvals.persistent.clone();
         if self
             .write_now(
@@ -650,7 +718,9 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         {
             return self.recover(FailureStage::Save);
         }
-        self.journal.append(JournalEvent::Saved);
+        if let Err(terminal) = self.record(JournalEvent::Saved) {
+            return terminal;
+        }
 
         self.reboot_and_verify()
     }
@@ -660,6 +730,13 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
     fn reboot_and_verify(&mut self) -> TerminalClassification {
         let plan = self.plan.clone().expect("plan built before rebooting");
         self.tr(SessionState::Rebooting);
+        if let Err(terminal) = self.record(JournalEvent::WriteAhead {
+            class: WriteCommandClass::Reboot,
+            recovery: RecoveryClass::ManualRecoveryRequired,
+        }) {
+            return terminal;
+        }
+        self.write_may_have_occurred = true;
         let approval = self.approvals.reboot.clone();
         if self
             .write_now(
@@ -671,14 +748,18 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         {
             return self.recover(FailureStage::Reboot);
         }
-        self.journal.append(JournalEvent::Rebooted);
+        if let Err(terminal) = self.record(JournalEvent::Rebooted) {
+            return terminal;
+        }
 
         self.tr(SessionState::Reconnecting);
         self.transport.close();
         if self.transport.open().is_err() {
             return self.recover(FailureStage::Reconnect);
         }
-        self.journal.append(JournalEvent::Reconnected);
+        if let Err(terminal) = self.record(JournalEvent::Reconnected) {
+            return terminal;
+        }
 
         self.tr(SessionState::Verifying);
         self.transport.begin_identification();
@@ -691,7 +772,7 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
             // A different device came back: stop immediately. No recovery write may be
             // aimed at a different identity.
             self.failure_stage = Some(FailureStage::IdentityMismatchAfterReboot);
-            self.journal.append(JournalEvent::StateUnknown);
+            let _ = self.journal.try_append(JournalEvent::StateUnknown);
             self.tr(SessionState::StateUnknownRecoveryRequired);
             return TerminalClassification::StateUnknownRecoveryRequired;
         }
@@ -706,7 +787,9 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         if !evidence.matched {
             return self.recover(FailureStage::VerifyMismatch);
         }
-        self.journal.append(JournalEvent::Verified);
+        if let Err(terminal) = self.record(JournalEvent::Verified) {
+            return terminal;
+        }
         self.tr(SessionState::CompletedVerified);
         TerminalClassification::CompletedVerified
     }
@@ -738,7 +821,7 @@ impl<T: LogicalTransport + PhasedTransport + AuditAccess> Engine<T> {
         } else {
             // A third value: nothing about this state is provable from the journal.
             self.failure_stage = Some(FailureStage::ResumeUnexpectedValue);
-            self.journal.append(JournalEvent::StateUnknown);
+            let _ = self.journal.try_append(JournalEvent::StateUnknown);
             self.tr(SessionState::StateUnknownRecoveryRequired);
             return TerminalClassification::StateUnknownRecoveryRequired;
         };
@@ -873,6 +956,31 @@ pub fn run_beeper_lifecycle<T: LogicalTransport + PhasedTransport + AuditAccess>
     case_meta: CaseMetadata,
     approvals: SimulationApprovals,
 ) -> M1RunReport {
+    run_beeper_lifecycle_with_journal(
+        target,
+        goal,
+        transport,
+        case_meta,
+        approvals,
+        Journal::new(),
+    )
+}
+
+/// Run the M1 lifecycle with a caller-supplied journal.
+///
+/// Supplying a journal returned by [`Journal::open`] makes every lifecycle checkpoint and
+/// write-ahead event durable under that journal's byte bound. The established
+/// [`run_beeper_lifecycle`] convenience API remains an in-memory simulation.
+pub fn run_beeper_lifecycle_with_journal<
+    T: LogicalTransport + PhasedTransport + AuditAccess,
+>(
+    target: ExecutionTarget,
+    goal: SystemInitBeeperGoal,
+    transport: T,
+    case_meta: CaseMetadata,
+    approvals: SimulationApprovals,
+    journal: Journal,
+) -> M1RunReport {
     match Executor::new_simulation(target) {
         Ok(executor) => {
             let mut engine = Engine::new(
@@ -882,7 +990,7 @@ pub fn run_beeper_lifecycle<T: LogicalTransport + PhasedTransport + AuditAccess>
                 executor,
                 case_meta,
                 approvals,
-                Journal::new(),
+                journal,
             );
             let terminal = engine.drive();
             engine.into_report(terminal)
@@ -927,6 +1035,12 @@ pub fn resume_beeper_lifecycle<T: LogicalTransport + PhasedTransport + AuditAcce
             let terminal = engine.resume_verify_save(&backup);
             engine.into_report(terminal)
         }
+        ReconcileDecision::StateUnknown => {
+            engine.failure_stage = Some(FailureStage::Journal);
+            let _ = engine.journal.try_append(JournalEvent::StateUnknown);
+            engine.tr(SessionState::StateUnknownRecoveryRequired);
+            engine.into_report(TerminalClassification::StateUnknownRecoveryRequired)
+        }
     }
 }
 
@@ -951,12 +1065,24 @@ fn rebuild_report<T: LogicalTransport + PhasedTransport + AuditAccess>(
                 JournalEvent::IdentityRead,
                 JournalEvent::SnapshotRead,
                 JournalEvent::BackedUp,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::TransientConfig,
+                    recovery: RecoveryClass::TransientWritePendingReconcileOnResume,
+                },
                 JournalEvent::TransientWriteApplied {
                     field: "beeper_off_flags",
                     mask: SYSTEM_INIT_OFF_MASK,
                 },
                 JournalEvent::ReReadBeforeSave,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::PersistentConfig,
+                    recovery: RecoveryClass::AutomaticRollbackSupported,
+                },
                 JournalEvent::Saved,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::Reboot,
+                    recovery: RecoveryClass::ManualRecoveryRequired,
+                },
                 JournalEvent::Rebooted,
                 JournalEvent::Reconnected,
                 JournalEvent::Verified,
@@ -985,15 +1111,50 @@ fn rebuild_report<T: LogicalTransport + PhasedTransport + AuditAccess>(
             }
         }
         Some(JournalEvent::Restored) => {
-            let chain = [
+            let common_chain = [
                 JournalEvent::Started {
                     execution_target: engine.target,
                 },
                 JournalEvent::IdentityRead,
+                JournalEvent::SnapshotRead,
+                JournalEvent::BackedUp,
                 JournalEvent::RecoveryStarted,
                 JournalEvent::Restored,
             ];
-            if contains_subsequence(&events, &chain) {
+            let recovery_start = events
+                .iter()
+                .rposition(|event| matches!(event, JournalEvent::RecoveryStarted));
+            let recovery_wrote = recovery_start.is_some_and(|start| {
+                events[start..]
+                    .iter()
+                    .any(|event| matches!(event, JournalEvent::WriteAhead { .. }))
+            });
+            let write_chain = [
+                JournalEvent::RecoveryStarted,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::TransientConfig,
+                    recovery: RecoveryClass::RestoreFromBackupSupported,
+                },
+                JournalEvent::TransientWriteApplied {
+                    field: "beeper_off_flags",
+                    mask: SYSTEM_INIT_OFF_MASK,
+                },
+                JournalEvent::ReReadBeforeSave,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::PersistentConfig,
+                    recovery: RecoveryClass::RestoreFromBackupSupported,
+                },
+                JournalEvent::Saved,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::Reboot,
+                    recovery: RecoveryClass::ManualRecoveryRequired,
+                },
+                JournalEvent::Rebooted,
+                JournalEvent::Restored,
+            ];
+            if contains_subsequence(&events, &common_chain)
+                && (!recovery_wrote || contains_subsequence(&events, &write_chain))
+            {
                 engine.recovery_attempted = true;
                 TerminalClassification::CompletedRestored
             } else {
@@ -1414,7 +1575,8 @@ mod tests {
         assert!(!report.recovery_attempted);
 
         // Journal chain, in order.
-        for (index, name) in [
+        let mut checkpoint_iter = report.checkpoints.iter();
+        for name in [
             "Started",
             "IdentityRead",
             "SnapshotRead",
@@ -1426,13 +1588,10 @@ mod tests {
             "Reconnected",
             "Verified",
         ]
-        .iter()
-        .enumerate()
         {
             assert!(
-                report.checkpoints[index].contains(name),
-                "checkpoint {index} should be {name}, got {}",
-                report.checkpoints[index],
+                checkpoint_iter.any(|checkpoint| checkpoint.contains(name)),
+                "checkpoint subsequence should contain {name}",
             );
         }
 
@@ -1860,12 +2019,24 @@ mod tests {
             JournalEvent::IdentityRead,
             JournalEvent::SnapshotRead,
             JournalEvent::BackedUp,
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::TransientConfig,
+                recovery: RecoveryClass::TransientWritePendingReconcileOnResume,
+            },
             JournalEvent::TransientWriteApplied {
                 field: "beeper_off_flags",
                 mask: SYSTEM_INIT_OFF_MASK,
             },
             JournalEvent::ReReadBeforeSave,
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::PersistentConfig,
+                recovery: RecoveryClass::AutomaticRollbackSupported,
+            },
             JournalEvent::Saved,
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::Reboot,
+                recovery: RecoveryClass::ManualRecoveryRequired,
+            },
             JournalEvent::Rebooted,
             JournalEvent::Reconnected,
             JournalEvent::Verified,
@@ -1905,6 +2076,65 @@ mod tests {
             report.failure_stage,
             Some(FailureStage::ResumeIncompleteEvidence)
         );
+
+        // Matching event kinds are insufficient: exact target, mask and write-ahead
+        // recovery evidence are all part of the terminal proof.
+        let invalid_terminal = |target, mask| {
+            let mut journal = Journal::new();
+            for event in [
+                JournalEvent::Started {
+                    execution_target: target,
+                },
+                JournalEvent::IdentityRead,
+                JournalEvent::SnapshotRead,
+                JournalEvent::BackedUp,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::TransientConfig,
+                    recovery: RecoveryClass::TransientWritePendingReconcileOnResume,
+                },
+                JournalEvent::TransientWriteApplied {
+                    field: "beeper_off_flags",
+                    mask,
+                },
+                JournalEvent::ReReadBeforeSave,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::PersistentConfig,
+                    recovery: RecoveryClass::AutomaticRollbackSupported,
+                },
+                JournalEvent::Saved,
+                JournalEvent::WriteAhead {
+                    class: WriteCommandClass::Reboot,
+                    recovery: RecoveryClass::ManualRecoveryRequired,
+                },
+                JournalEvent::Rebooted,
+                JournalEvent::Reconnected,
+                JournalEvent::Verified,
+            ] {
+                journal.append(event);
+            }
+            resume_beeper_lifecycle(
+                ExecutionTarget::Mock,
+                MockTransport::new(MockFc::new(snapshot(DESIRED)), InMemoryAudit::new()),
+                meta(),
+                approvals(),
+                journal,
+                backup_for_change(),
+            )
+        };
+        for report in [
+            invalid_terminal(ExecutionTarget::Replay, SYSTEM_INIT_OFF_MASK),
+            invalid_terminal(ExecutionTarget::Mock, SYSTEM_INIT_OFF_MASK << 1),
+        ] {
+            assert_eq!(
+                report.terminal,
+                TerminalClassification::StateUnknownRecoveryRequired
+            );
+            assert_eq!(
+                report.failure_stage,
+                Some(FailureStage::ResumeIncompleteEvidence)
+            );
+            assert!(report.audit.is_empty());
+        }
     }
 
     /// 13. Disconnect during identification: nothing was written, honest abort.
@@ -2171,5 +2401,108 @@ mod tests {
         let final_snapshot = restored.recovery_evidence.unwrap().final_snapshot.unwrap();
         assert_eq!(final_snapshot.dshot_beacon_tone, TONE);
         assert_eq!(final_snapshot.dshot_beacon_off_flags, DSHOT_FLAGS);
+    }
+
+    #[test]
+    fn every_happy_path_write_has_synced_write_ahead_evidence() {
+        let report = run_mock(MockFc::new(snapshot(PREV)));
+        let transient_ahead = report
+            .checkpoints
+            .iter()
+            .position(|event| {
+                event.contains("WriteAhead") && event.contains("TransientConfig")
+            })
+            .unwrap();
+        let transient_done = report
+            .checkpoints
+            .iter()
+            .position(|event| event.contains("TransientWriteApplied"))
+            .unwrap();
+        let save_ahead = report
+            .checkpoints
+            .iter()
+            .position(|event| {
+                event.contains("WriteAhead") && event.contains("PersistentConfig")
+            })
+            .unwrap();
+        let save_done = report
+            .checkpoints
+            .iter()
+            .position(|event| event == "Saved")
+            .unwrap();
+        let reboot_ahead = report
+            .checkpoints
+            .iter()
+            .position(|event| event.contains("WriteAhead") && event.contains("Reboot"))
+            .unwrap();
+        let reboot_done = report
+            .checkpoints
+            .iter()
+            .position(|event| event == "Rebooted")
+            .unwrap();
+        assert!(transient_ahead < transient_done);
+        assert!(transient_done < save_ahead && save_ahead < save_done);
+        assert!(save_done < reboot_ahead && reboot_ahead < reboot_done);
+    }
+
+    #[test]
+    fn journal_full_before_the_first_write_aborts_without_sending() {
+        // Header + Started + IdentityRead + SnapshotRead + BackedUp. The next
+        // WriteAhead record cannot fit.
+        let journal = Journal::with_limit(45).unwrap();
+        let report = run_beeper_lifecycle_with_journal(
+            ExecutionTarget::Mock,
+            SystemInitBeeperGoal::Disable,
+            MockTransport::new(MockFc::new(snapshot(PREV)), InMemoryAudit::new()),
+            meta(),
+            approvals(),
+            journal,
+        );
+        assert_eq!(
+            report.terminal,
+            TerminalClassification::AbortedBeforeAnyWrite
+        );
+        assert_eq!(report.failure_stage, Some(FailureStage::Journal));
+        assert!(sent_write_commands(&report).is_empty());
+    }
+
+    #[test]
+    fn resume_identification_failure_is_state_unknown_not_a_fresh_abort() {
+        let mut journal = Journal::new();
+        for event in [
+            JournalEvent::Started {
+                execution_target: ExecutionTarget::Mock,
+            },
+            JournalEvent::IdentityRead,
+            JournalEvent::SnapshotRead,
+            JournalEvent::BackedUp,
+            JournalEvent::WriteAhead {
+                class: WriteCommandClass::TransientConfig,
+                recovery: RecoveryClass::TransientWritePendingReconcileOnResume,
+            },
+            JournalEvent::TransientWriteApplied {
+                field: "beeper_off_flags",
+                mask: SYSTEM_INIT_OFF_MASK,
+            },
+        ] {
+            journal.append(event);
+        }
+        let responder =
+            FaultInjector::new(MockFc::new(snapshot(DESIRED)), 0, Fault::Timeout);
+        let report = resume_beeper_lifecycle(
+            ExecutionTarget::Mock,
+            MockTransport::new(responder, InMemoryAudit::new()),
+            meta(),
+            approvals(),
+            journal,
+            backup_for_change(),
+        );
+        assert_eq!(
+            report.terminal,
+            TerminalClassification::StateUnknownRecoveryRequired
+        );
+        assert_eq!(report.failure_stage, Some(FailureStage::ResumeIdentity));
+        assert_eq!(report.readiness, "STATE UNKNOWN — RECOVERY REQUIRED");
+        assert!(sent_write_commands(&report).is_empty());
     }
 }
