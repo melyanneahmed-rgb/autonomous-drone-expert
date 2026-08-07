@@ -1,0 +1,11 @@
+[package]
+name = "ade-runtime-ports"
+description = "Deterministic effect boundary between the Rust core and asynchronous host I/O adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# First-party workspace path dependencies only (ADR-0009).
+[dependencies]
+ade-safety = { path = "../safety" }

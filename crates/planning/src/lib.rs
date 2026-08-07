@@ -2,9 +2,10 @@
 
 //! # `ade-planning` — product goals and the M1 beeper change plan
 //!
-//! [`product`] fixes the user/program responsibility boundary for every future plan. It is
-//! descriptive only: it cannot emit protocol frames or authorise writes. The existing M1
-//! implementation builds the single typed beeper plan: flip exactly the
+//! [`product`] fixes the user/program responsibility boundary and provides protocol-neutral,
+//! provenance- and recovery-bearing setting deltas for every future plan. It cannot emit
+//! protocol frames or authorise writes. The existing M1 implementation builds the single
+//! typed beeper plan: flip exactly the
 //! `BEEPER_SYSTEM_INIT` bit of `beeper_off_flags`, or prove that nothing needs to change
 //! (an explicit no-op plan). The plan carries the full initial snapshot, the exact intended
 //! delta, the ordered steps with their [`WriteCommandClass`] and [`RecoveryClass`], the
