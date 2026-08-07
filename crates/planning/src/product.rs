@@ -195,9 +195,7 @@ mod tests {
         let manual: Vec<_> = ALL_SETTING_DOMAINS
             .iter()
             .copied()
-            .filter(|domain| {
-                domain.responsibility() == Responsibility::UserManualControlAssignment
-            })
+            .filter(|domain| domain.responsibility() == Responsibility::UserManualControlAssignment)
             .collect();
         assert_eq!(manual, vec![SettingDomain::ControlFunctionAssignments]);
         assert_eq!(ALL_SETTING_DOMAINS.len() - manual.len(), 13);
@@ -233,9 +231,9 @@ mod tests {
         ]);
         assert_eq!(
             same_input,
-            Err(ProductInputError::DuplicateControlInput(ControlInput::Switch(
-                1
-            )))
+            Err(ProductInputError::DuplicateControlInput(
+                ControlInput::Switch(1)
+            ))
         );
 
         let same_function = ManualControlAssignments::new(vec![
