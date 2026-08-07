@@ -1743,6 +1743,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_scope_mismatch_field_is_rejected_explicitly() {
+        let mut identity = mock_identity();
+        assert_eq!(check_scope(&identity), ScopeStatus::InScope);
+
+        identity.api.protocol_version = 1;
+        assert_eq!(
+            check_scope(&identity),
+            ScopeStatus::Mismatch {
+                field: "protocol_version"
+            }
+        );
+
+        identity = mock_identity();
+        identity.api.api_minor = 45;
+        assert_eq!(
+            check_scope(&identity),
+            ScopeStatus::Mismatch {
+                field: "msp_api_version"
+            }
+        );
+
+        identity = mock_identity();
+        identity.variant.identifier = *b"INAV";
+        assert_eq!(
+            check_scope(&identity),
+            ScopeStatus::Mismatch {
+                field: "fc_variant"
+            }
+        );
+
+        identity = mock_identity();
+        identity.version.patch = 4;
+        assert_eq!(
+            check_scope(&identity),
+            ScopeStatus::Mismatch {
+                field: "fc_version"
+            }
+        );
+
+        identity = mock_identity();
+        identity.target_name = "UNSUPPORTED".to_string();
+        assert_eq!(
+            check_scope(&identity),
+            ScopeStatus::Mismatch {
+                field: "target_name"
+            }
+        );
+    }
+
     // ---- the 26 mandatory failure scenarios ----
 
     /// 1. Mask mismatch after reboot (the save silently never committed).
