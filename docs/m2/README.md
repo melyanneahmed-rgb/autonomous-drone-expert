@@ -23,7 +23,8 @@ Construction rejects unchanged values, duplicate settings, missing provenance an
 recovery declarations. The binding responsibility rule is structural:
 
 - the thirteen automatic domains accept only `ProgramDerived` changes;
-- `ControlFunctionAssignments` accepts only a user-confirmed control assignment;
+- `ControlFunctionAssignments` accepts only a typed value identical to the user's confirmed
+  control assignment; a different numeric or structured value is rejected;
 - neither representation carries a protocol command, a UART selection or write approval.
 
 An empty `ProductConfigurationPlan` is the single explicit no-op form.
@@ -43,6 +44,8 @@ or native host completes it later with the same `RequestId` and response kind.
 - Storage keys are bounded identifiers, not paths. Compare-and-swap commits carry an expected
   revision so IndexedDB transactions or native atomic replacement report conflicts instead of
   overwriting a newer case record.
+- Debug representations redact storage keys and all raw transport/storage bytes; they expose
+  only request metadata, failure classes and payload lengths.
 
 The host adapter owns the selected port handle and the IndexedDB/native storage handle. The
 ordinary UI consumes product contracts only; it does not receive protocol frames or storage

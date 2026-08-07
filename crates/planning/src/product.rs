@@ -254,6 +254,9 @@ pub enum SettingValue {
     Unsigned(u64),
     /// A pack-owned choice identifier; never a user-visible configurator string.
     Choice(u16),
+    /// The exact transmitter assignment selected by the user, or no prior assignment.
+    /// This value is valid only for [`SettingDomain::ControlFunctionAssignments`].
+    ControlAssignment(Option<ManualControlAssignment>),
 }
 
 /// Where the decision represented by a setting delta came from.
@@ -275,6 +278,16 @@ pub enum ProductPlanError {
         setting: SettingId,
         source: DecisionSource,
     },
+    /// A control-assignment delta did not reproduce the user's exact confirmed choice.
+    UserDecisionMismatch {
+        setting: SettingId,
+        confirmed: ManualControlAssignment,
+        proposed: SettingValue,
+    },
+    /// A control-assignment delta did not use the dedicated typed value on both sides.
+    ControlAssignmentValueRequired(SettingId),
+    /// A control-assignment value was used outside its one valid product domain.
+    ControlAssignmentValueOutsideDomain(SettingId),
     /// A real delta did not declare a usable recovery posture.
     InvalidRecoveryClass(SettingId),
     /// A setting delta has no pinned provenance evidence.
@@ -316,18 +329,46 @@ impl PlannedSettingChange {
         if before == after {
             return Err(ProductPlanError::NoChange(setting));
         }
-        let source_matches = matches!(
-            (setting.domain().responsibility(), source),
+        match (setting.domain().responsibility(), source, before, after) {
             (
                 Responsibility::ProgramAutomatic,
-                DecisionSource::ProgramDerived
-            ) | (
+                DecisionSource::ProgramDerived,
+                previous,
+                proposed,
+            ) => {
+                if matches!(previous, SettingValue::ControlAssignment(_))
+                    || matches!(proposed, SettingValue::ControlAssignment(_))
+                {
+                    return Err(ProductPlanError::ControlAssignmentValueOutsideDomain(
+                        setting,
+                    ));
+                }
+            }
+            (
                 Responsibility::UserManualControlAssignment,
-                DecisionSource::UserConfirmedControlAssignment(_)
-            )
-        );
-        if !source_matches {
-            return Err(ProductPlanError::ResponsibilityMismatch { setting, source });
+                DecisionSource::UserConfirmedControlAssignment(decision),
+                SettingValue::ControlAssignment(_),
+                SettingValue::ControlAssignment(Some(proposed)),
+            ) if proposed == decision.assignment() => {}
+            (
+                Responsibility::UserManualControlAssignment,
+                DecisionSource::UserConfirmedControlAssignment(decision),
+                SettingValue::ControlAssignment(_),
+                proposed,
+            ) => {
+                return Err(ProductPlanError::UserDecisionMismatch {
+                    setting,
+                    confirmed: decision.assignment(),
+                    proposed,
+                });
+            }
+            (
+                Responsibility::UserManualControlAssignment,
+                DecisionSource::UserConfirmedControlAssignment(_),
+                _,
+                _,
+            ) => return Err(ProductPlanError::ControlAssignmentValueRequired(setting)),
+            _ => return Err(ProductPlanError::ResponsibilityMismatch { setting, source }),
         }
         if matches!(
             recovery,
@@ -563,11 +604,12 @@ mod tests {
         }])
         .unwrap();
         let user_decision = assignments.confirmed_decision(0).unwrap();
+        let exact_assignment = user_decision.assignment();
         assert!(
             PlannedSettingChange::new(
                 setting,
-                SettingValue::Choice(1),
-                SettingValue::Choice(2),
+                SettingValue::ControlAssignment(None),
+                SettingValue::ControlAssignment(Some(exact_assignment)),
                 DecisionSource::UserConfirmedControlAssignment(user_decision),
                 RecoveryClass::RestoreFromBackupSupported,
                 provenance(),
@@ -584,8 +626,8 @@ mod tests {
         assert_eq!(
             PlannedSettingChange::new(
                 setting,
-                SettingValue::Choice(1),
-                SettingValue::Choice(2),
+                SettingValue::ControlAssignment(None),
+                SettingValue::ControlAssignment(Some(exact_assignment)),
                 DecisionSource::ProgramDerived,
                 RecoveryClass::RestoreFromBackupSupported,
                 provenance(),
@@ -594,6 +636,54 @@ mod tests {
                 setting,
                 source: DecisionSource::ProgramDerived,
             })
+        );
+
+        let invented = ManualControlAssignment {
+            input: ControlInput::Button(9),
+            function: ControlFunction::Rescue,
+        };
+        assert_eq!(
+            PlannedSettingChange::new(
+                setting,
+                SettingValue::ControlAssignment(None),
+                SettingValue::ControlAssignment(Some(invented)),
+                DecisionSource::UserConfirmedControlAssignment(user_decision),
+                RecoveryClass::RestoreFromBackupSupported,
+                provenance(),
+            ),
+            Err(ProductPlanError::UserDecisionMismatch {
+                setting,
+                confirmed: exact_assignment,
+                proposed: SettingValue::ControlAssignment(Some(invented)),
+            })
+        );
+
+        assert_eq!(
+            PlannedSettingChange::new(
+                setting,
+                SettingValue::Choice(1),
+                SettingValue::ControlAssignment(Some(exact_assignment)),
+                DecisionSource::UserConfirmedControlAssignment(user_decision),
+                RecoveryClass::RestoreFromBackupSupported,
+                provenance(),
+            ),
+            Err(ProductPlanError::ControlAssignmentValueRequired(setting))
+        );
+    }
+
+    #[test]
+    fn control_assignment_values_cannot_leak_into_automatic_domains() {
+        let setting = SettingId::new(SettingDomain::Filters, 9);
+        assert_eq!(
+            PlannedSettingChange::new(
+                setting,
+                SettingValue::Unsigned(10),
+                SettingValue::ControlAssignment(Some(user_decision().assignment())),
+                DecisionSource::ProgramDerived,
+                RecoveryClass::RestoreFromBackupSupported,
+                provenance(),
+            ),
+            Err(ProductPlanError::ControlAssignmentValueOutsideDomain(setting))
         );
     }
 

@@ -14,6 +14,7 @@
 //! support.
 
 use ade_safety::{ExecutionTarget, RecoveryClass, WriteApproval, WriteCommandClass};
+use core::fmt;
 
 /// A monotonically allocated identifier for one host-I/O effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,8 +33,14 @@ impl RequestId {
 /// It is intentionally not a path and cannot contain separators. The host supplies a case
 /// key; it must never derive one from a serial number, USB uid, GPS coordinate or board
 /// signature.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct StorageKey(String);
+
+impl fmt::Debug for StorageKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("StorageKey(<redacted>)")
+    }
+}
 
 impl StorageKey {
     /// Validate a storage key of 1..=64 lowercase ASCII letters, digits, `_` or `-`.
@@ -88,11 +95,23 @@ enum PacketAuthority {
 /// Protocol-specific audit still validates the actual frame. This wrapper prevents the host
 /// adapter from being handed a write-class packet unless simulation write evidence already
 /// exists.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OutboundPacket {
     bytes: Vec<u8>,
     class: WriteCommandClass,
     authority: PacketAuthority,
+}
+
+impl fmt::Debug for OutboundPacket {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OutboundPacket")
+            .field("byte_len", &self.bytes.len())
+            .field("class", &self.class)
+            .field("approved_target", &self.approved_target())
+            .field("approved_recovery", &self.approved_recovery())
+            .finish()
+    }
 }
 
 impl OutboundPacket {
@@ -170,7 +189,7 @@ pub enum TransportEffect {
 }
 
 /// An effect for local, host-owned storage.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum StorageEffect {
     /// Load the latest committed bytes and revision for a case key.
     Load { key: StorageKey },
@@ -183,6 +202,24 @@ pub enum StorageEffect {
         expected_revision: Option<StorageRevision>,
         bytes: Vec<u8>,
     },
+}
+
+impl fmt::Debug for StorageEffect {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load { key } => formatter.debug_struct("Load").field("key", key).finish(),
+            Self::CompareAndSwap {
+                key,
+                expected_revision,
+                bytes,
+            } => formatter
+                .debug_struct("CompareAndSwap")
+                .field("key", key)
+                .field("expected_revision", expected_revision)
+                .field("byte_len", &bytes.len())
+                .finish(),
+        }
+    }
 }
 
 /// A typed request emitted by the deterministic core for a host adapter.
@@ -231,18 +268,45 @@ pub enum StorageFailure {
 }
 
 /// The result of one transport effect.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum TransportResult {
     Open(Result<(), TransportFailure>),
     Exchange(Result<Vec<u8>, TransportFailure>),
     Close(Result<(), TransportFailure>),
 }
 
+impl fmt::Debug for TransportResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open(result) => formatter.debug_tuple("Open").field(result).finish(),
+            Self::Exchange(Ok(bytes)) => formatter
+                .debug_struct("Exchange")
+                .field("byte_len", &bytes.len())
+                .finish(),
+            Self::Exchange(Err(error)) => formatter
+                .debug_struct("Exchange")
+                .field("error", error)
+                .finish(),
+            Self::Close(result) => formatter.debug_tuple("Close").field(result).finish(),
+        }
+    }
+}
+
 /// A value loaded atomically with its current storage revision.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct StoredValue {
     pub revision: StorageRevision,
     pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for StoredValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StoredValue")
+            .field("revision", &self.revision)
+            .field("byte_len", &self.bytes.len())
+            .finish()
+    }
 }
 
 /// The result of one storage effect.
@@ -575,5 +639,44 @@ mod tests {
             })
             .unwrap();
         assert!(!coordinator.has_pending_storage());
+    }
+
+    #[test]
+    fn debug_output_redacts_keys_and_raw_bytes() {
+        let sensitive_text = "serial-uid-gps-coordinate";
+        let sensitive_bytes = sensitive_text.as_bytes().to_vec();
+        let storage_key = StorageKey::new("case-sensitive-key").unwrap();
+
+        let key_debug = format!("{storage_key:?}");
+        assert!(!key_debug.contains("case-sensitive-key"));
+
+        let packet = OutboundPacket::read_only(sensitive_bytes.clone()).unwrap();
+        let packet_debug = format!("{packet:?}");
+        assert!(!packet_debug.contains(sensitive_text));
+        assert!(packet_debug.contains("byte_len"));
+
+        let storage_effect = StorageEffect::CompareAndSwap {
+            key: storage_key,
+            expected_revision: Some(StorageRevision::new(2)),
+            bytes: sensitive_bytes.clone(),
+        };
+        let storage_effect_debug = format!("{storage_effect:?}");
+        assert!(!storage_effect_debug.contains(sensitive_text));
+        assert!(!storage_effect_debug.contains("case-sensitive-key"));
+
+        let transport_response = IoResponse::Transport {
+            request_id: RequestId(7),
+            result: TransportResult::Exchange(Ok(sensitive_bytes.clone())),
+        };
+        assert!(!format!("{transport_response:?}").contains(sensitive_text));
+
+        let storage_response = IoResponse::Storage {
+            request_id: RequestId(8),
+            result: StorageResult::Load(Ok(Some(StoredValue {
+                revision: StorageRevision::new(3),
+                bytes: sensitive_bytes,
+            }))),
+        };
+        assert!(!format!("{storage_response:?}").contains(sensitive_text));
     }
 }
