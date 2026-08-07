@@ -26,10 +26,16 @@ on:
 permissions:
   contents: read
 
+# Collapse duplicate push/pull_request delivery for the same revision and cancel stale work.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   policy-gates:
     name: policy-gates
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -55,6 +61,7 @@ jobs:
   rust-linux:
     name: rust-linux
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -77,6 +84,7 @@ jobs:
   rust-windows:
     name: rust-windows
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -103,6 +111,7 @@ jobs:
     # `+1.85.0` overrides that pin for this job only.
     name: rust-msrv
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -128,6 +137,7 @@ jobs:
     # spike; changing it is a dedicated pull request.
     name: cargo-deny
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
