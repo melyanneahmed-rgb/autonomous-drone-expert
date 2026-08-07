@@ -109,6 +109,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ade-runtime-ports"
+version = "0.0.0"
+dependencies = [
+ "ade-safety",
+]
+
+[[package]]
 name = "ade-safety"
 version = "0.0.0"
 

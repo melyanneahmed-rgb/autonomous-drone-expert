@@ -8,8 +8,8 @@ internal implementation details rather than the product identity.
 
 ## Status
 
-**M1 acceptance candidate: simulation only, not a production release and not hardware
-validated.**
+**M1 accepted on simulation; G1 merged; M2 product-core work in progress. This is not a
+production release and is not hardware validated.**
 
 M0 foundations are complete. The current M1 candidate implements one deliberately narrow
 vertical slice for the Betaflight 4.5.5 `SYSTEM_INIT` beeper bit over project-owned Mock and
@@ -17,9 +17,15 @@ Replay transports: Identify → Read → Plan → Backup → Write → Save → 
 Verify → Recovery/Report. It includes injected failure coverage, durable local journal
 evidence and fail-closed resume handling.
 
-There is still no serial/USB production transport, UI, firmware flashing, motor control or
-hardware-support claim. No flight controller has been contacted, written to or flashed by
-this project. See `docs/m1/README.md` for the exact acceptance boundary.
+M2 now builds the protocol-independent product plan and an effect boundary between the
+deterministic Rust core and asynchronous Web/native transport and storage adapters. The new
+boundary performs no I/O and adds no hardware authority; CI cross-compiles its first crates
+for `wasm32-unknown-unknown`. See `docs/m2/README.md`.
+
+The deployed PWA shell is not yet repository-integrated with this Rust core. There is still
+no production serial/USB transport, firmware flashing, motor control or hardware-support
+claim. No flight controller has been contacted, written to or flashed by this repository.
+See `docs/m1/README.md` for the exact acceptance boundary.
 
 ## What this project is
 
@@ -58,6 +64,7 @@ lifecycle. It does not depend on, import from, or share code with any other repo
 | Source provenance policy | `provenance/README.md` |
 | Hardware support matrix | `docs/hardware-support-matrix/README.md` |
 | M1 simulation acceptance candidate | `docs/m1/README.md` |
+| M2 Product Core boundary | `docs/m2/README.md` |
 | Binding product contract | `docs/product/PRODUCT-CONTRACT.md` |
 
 ## Licensing

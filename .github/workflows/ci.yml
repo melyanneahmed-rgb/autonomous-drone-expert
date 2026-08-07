@@ -1,11 +1,11 @@
 # Foundation CI.
 # Repository Actions policy intentionally allow-lists actions/checkout@v7.0.1 only.
 #
-# Scope note (honesty): these gates cover the M0 policy foundation and the M1 Mock/Replay
-# Rust slice with first-party workspace path dependencies only. Gates for Tauri, React,
-# Vitest, Playwright, serial/USB/DFU, hardware and release publishing are deliberately
-# absent and are added with those components. M1 line/branch coverage is fail-closed for
-# the five critical lifecycle files.
+# Scope note (honesty): these gates cover the M0 policy foundation, the M1 Mock/Replay Rust
+# slice and the M2 product-core crates that are explicitly checked for WebAssembly. Gates
+# for UI interaction, serial/USB/DFU, hardware and release publishing are deliberately
+# absent and are added with those components. M1 line/branch coverage remains fail-closed
+# for the five critical lifecycle files.
 #
 # Action pinning: actions are pinned to an exact release tag. Pinning to a commit SHA
 # could not be completed in the environment that authored this file, because the GitHub
@@ -134,6 +134,25 @@ jobs:
 
       - name: Check workspace against declared MSRV
         run: cargo +1.85.0 check --workspace --all-targets
+
+  rust-wasm-core:
+    # M2 does not claim that the whole native M1 harness is a browser application. This job
+    # proves the protocol-independent planning and host-effect boundary compile for the
+    # browser target without filesystem, serial, IndexedDB or Web Serial dependencies.
+    name: rust-wasm-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install browser target for the pinned toolchain
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check deterministic M2 boundary for WebAssembly
+        run: |
+          cargo check --target wasm32-unknown-unknown -p ade-planning
+          cargo check --target wasm32-unknown-unknown -p ade-runtime-ports
 
   cargo-deny:
     # Supply-chain gate for the dependency policy (ADR-0009). The workspace may now carry
