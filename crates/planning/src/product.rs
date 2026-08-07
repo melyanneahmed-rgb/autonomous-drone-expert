@@ -683,7 +683,9 @@ mod tests {
                 RecoveryClass::RestoreFromBackupSupported,
                 provenance(),
             ),
-            Err(ProductPlanError::ControlAssignmentValueOutsideDomain(setting))
+            Err(ProductPlanError::ControlAssignmentValueOutsideDomain(
+                setting
+            ))
         );
     }
 
