@@ -8,4 +8,5 @@ publish = false
 
 # First-party workspace path dependencies only (ADR-0009).
 [dependencies]
+ade-protocol-msp = { path = "../protocol-msp" }
 ade-safety = { path = "../safety" }

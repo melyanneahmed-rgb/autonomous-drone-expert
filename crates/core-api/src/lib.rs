@@ -1205,8 +1205,8 @@ mod tests {
     use ade_mock_fc::MockFc;
     use ade_protocol_msp::{Direction, SetBeeperConfig, decode_frame, encode_frame};
     use ade_transport::{
-        FrameResponder, InMemoryAudit, MockTransport, ReplayResponse, ReplayStep, ReplayTransport,
-        TransportError,
+        EffectTransport, FrameResponder, InMemoryAudit, LogicalEffectHost, MockTransport,
+        ReplayResponse, ReplayStep, ReplayTransport, TransportError,
     };
     use std::cell::Cell;
     use std::rc::Rc;
@@ -1248,11 +1248,29 @@ mod tests {
         SimulationApprovals::obtain(ExecutionTarget::Mock).expect("simulation approvals")
     }
 
+    fn approvals_for(target: ExecutionTarget) -> SimulationApprovals {
+        SimulationApprovals::obtain(target).expect("simulation approvals")
+    }
+
     fn run_mock<R: FrameResponder>(responder: R) -> M1RunReport {
         run_beeper_lifecycle(
             ExecutionTarget::Mock,
             SystemInitBeeperGoal::Disable,
             MockTransport::new(responder, InMemoryAudit::new()),
+            meta(),
+            approvals(),
+        )
+    }
+
+    fn run_effect_mock<R: FrameResponder>(responder: R) -> M1RunReport {
+        let host = LogicalEffectHost::new(
+            ExecutionTarget::Mock,
+            MockTransport::new(responder, InMemoryAudit::new()),
+        );
+        run_beeper_lifecycle(
+            ExecutionTarget::Mock,
+            SystemInitBeeperGoal::Disable,
+            EffectTransport::new(ExecutionTarget::Mock, host),
             meta(),
             approvals(),
         )
@@ -1486,6 +1504,15 @@ mod tests {
             self.exchanged.set(true);
             Err(TransportError::NotOpen)
         }
+        fn exchange_with_approval(
+            &mut self,
+            _request: &[u8],
+            _approval: &WriteApproval,
+            _declared_recovery: RecoveryClass,
+        ) -> Result<Vec<u8>, TransportError> {
+            self.exchanged.set(true);
+            Err(TransportError::NotOpen)
+        }
         fn close(&mut self) {}
     }
     impl PhasedTransport for ProbeNeverUsed {
@@ -1675,6 +1702,47 @@ mod tests {
         assert_eq!(report.verification_state, "REPLAY_EXERCISED");
         assert_eq!(report.session_history, FULL_WALK.to_vec());
         assert_eq!(report.audit.len(), 14);
+    }
+
+    #[test]
+    fn effect_backed_mock_preserves_the_complete_m1_report() {
+        let direct = run_mock(MockFc::new(snapshot(PREV)));
+        let effect = run_effect_mock(MockFc::new(snapshot(PREV)));
+        assert_eq!(effect, direct);
+
+        let direct_noop = run_mock(MockFc::new(snapshot(DESIRED)));
+        let effect_noop = run_effect_mock(MockFc::new(snapshot(DESIRED)));
+        assert_eq!(effect_noop, direct_noop);
+
+        let direct_failure = run_with_faults(vec![(ORD_SAVE, Fault::Timeout)], PREV);
+        let effect_failure = run_effect_mock(ScheduledFaultInjector::new(
+            MockFc::new(snapshot(PREV)),
+            vec![(ORD_SAVE, Fault::Timeout)],
+        ));
+        assert_eq!(effect_failure, direct_failure);
+    }
+
+    #[test]
+    fn effect_backed_replay_preserves_the_complete_m1_report() {
+        let direct = run_beeper_lifecycle(
+            ExecutionTarget::Replay,
+            SystemInitBeeperGoal::Disable,
+            ReplayTransport::new(happy_transcript(), InMemoryAudit::new()),
+            meta(),
+            approvals_for(ExecutionTarget::Replay),
+        );
+        let host = LogicalEffectHost::new(
+            ExecutionTarget::Replay,
+            ReplayTransport::new(happy_transcript(), InMemoryAudit::new()),
+        );
+        let effect = run_beeper_lifecycle(
+            ExecutionTarget::Replay,
+            SystemInitBeeperGoal::Disable,
+            EffectTransport::new(ExecutionTarget::Replay, host),
+            meta(),
+            approvals_for(ExecutionTarget::Replay),
+        );
+        assert_eq!(effect, direct);
     }
 
     #[test]

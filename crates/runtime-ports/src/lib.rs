@@ -10,9 +10,10 @@
 //!
 //! Transport and storage may each have one request in flight. Writes remain structurally
 //! bound to an [`ade_safety::WriteApproval`]; no new hardware-write authority is introduced.
-//! This crate does not identify a flight controller, parse protocol frames, or claim hardware
-//! support.
+//! It classifies the pinned command in each outbound frame before exposing bytes to a host,
+//! but does not identify a flight controller or claim hardware support.
 
+use ade_protocol_msp::{CommandId, Direction, decode_frame};
 use ade_safety::{ExecutionTarget, RecoveryClass, WriteApproval, WriteCommandClass};
 use core::fmt;
 
@@ -21,6 +22,13 @@ use core::fmt;
 pub struct RequestId(u64);
 
 impl RequestId {
+    /// Reconstruct an id carried by a host callback. The coordinator still validates it
+    /// against the exact pending request before accepting any response.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     /// The numeric value used by a host adapter when returning a response.
     #[must_use]
     pub const fn get(self) -> u64 {
@@ -123,6 +131,10 @@ impl OutboundPacket {
         if bytes.is_empty() {
             return Err(BoundaryError::EmptyPacket);
         }
+        let actual = classify_packet(&bytes)?;
+        if actual != WriteCommandClass::NoWrite {
+            return Err(BoundaryError::PacketRequiresApproval { actual });
+        }
         Ok(Self {
             bytes,
             class: WriteCommandClass::NoWrite,
@@ -140,6 +152,13 @@ impl OutboundPacket {
     pub fn approved(bytes: Vec<u8>, approval: WriteApproval) -> Result<Self, BoundaryError> {
         if bytes.is_empty() {
             return Err(BoundaryError::EmptyPacket);
+        }
+        let actual = classify_packet(&bytes)?;
+        if actual != approval.class() {
+            return Err(BoundaryError::PacketClassMismatch {
+                actual,
+                approved: approval.class(),
+            });
         }
         Ok(Self {
             bytes,
@@ -175,6 +194,35 @@ impl OutboundPacket {
             PacketAuthority::Approved(approval) => Some(approval.recovery()),
         }
     }
+
+    /// The original typed approval evidence, or `None` for a proven read.
+    #[must_use]
+    pub const fn approval(&self) -> Option<&WriteApproval> {
+        match &self.authority {
+            PacketAuthority::ReadOnly => None,
+            PacketAuthority::Approved(approval) => Some(approval),
+        }
+    }
+}
+
+fn classify_packet(bytes: &[u8]) -> Result<WriteCommandClass, BoundaryError> {
+    let frame = decode_frame(bytes).map_err(|_| BoundaryError::InvalidTransportPacket)?;
+    if frame.direction != Direction::Request {
+        return Err(BoundaryError::InvalidTransportPacket);
+    }
+    let command = frame
+        .known_command()
+        .ok_or(BoundaryError::InvalidTransportPacket)?;
+    Ok(match command {
+        CommandId::SetBeeperConfig => WriteCommandClass::TransientConfig,
+        CommandId::EepromWrite => WriteCommandClass::PersistentConfig,
+        CommandId::Reboot => WriteCommandClass::Reboot,
+        CommandId::ApiVersion
+        | CommandId::FcVariant
+        | CommandId::FcVersion
+        | CommandId::BoardInfo
+        | CommandId::BeeperConfig => WriteCommandClass::NoWrite,
+    })
 }
 
 /// An effect for the host-owned transport adapter.
@@ -349,6 +397,14 @@ struct Pending {
 pub enum BoundaryError {
     InvalidStorageKey,
     EmptyPacket,
+    InvalidTransportPacket,
+    PacketRequiresApproval {
+        actual: WriteCommandClass,
+    },
+    PacketClassMismatch {
+        actual: WriteCommandClass,
+        approved: WriteCommandClass,
+    },
     EmptyStorageValue,
     RequestIdExhausted,
     TransportRequestAlreadyPending,
@@ -480,6 +536,25 @@ impl IoCoordinator {
         Ok(response)
     }
 
+    /// Clear the exact pending transport request after the host reports a transport-layer
+    /// failure outside [`IoResponse`]. A stale id cannot clear a newer request.
+    ///
+    /// # Errors
+    /// Returns the same lane/id errors as [`Self::accept`] without changing pending state.
+    pub fn cancel_transport(&mut self, request_id: RequestId) -> Result<(), BoundaryError> {
+        let pending = self
+            .pending_transport
+            .ok_or(BoundaryError::NoTransportRequestPending)?;
+        if pending.request_id != request_id {
+            return Err(BoundaryError::RequestIdMismatch {
+                expected: pending.request_id,
+                received: request_id,
+            });
+        }
+        self.pending_transport = None;
+        Ok(())
+    }
+
     #[must_use]
     pub const fn has_pending_transport(&self) -> bool {
         self.pending_transport.is_some()
@@ -509,10 +584,15 @@ fn storage_result_kind(result: &StorageResult) -> ResponseKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ade_protocol_msp::{CommandId, Direction, encode_frame};
     use ade_safety::authorize_write;
 
     fn key() -> StorageKey {
         StorageKey::new("case-0001").unwrap()
+    }
+
+    fn request(command: CommandId, payload: &[u8]) -> Vec<u8> {
+        encode_frame(Direction::Request, command, payload).unwrap()
     }
 
     #[test]
@@ -528,7 +608,7 @@ mod tests {
 
     #[test]
     fn read_packets_carry_no_write_authority() {
-        let packet = OutboundPacket::read_only(vec![b'$', b'M']).unwrap();
+        let packet = OutboundPacket::read_only(request(CommandId::ApiVersion, &[])).unwrap();
         assert_eq!(packet.class(), WriteCommandClass::NoWrite);
         assert_eq!(packet.approved_target(), None);
         assert_eq!(packet.approved_recovery(), None);
@@ -546,12 +626,46 @@ mod tests {
             RecoveryClass::RestoreFromBackupSupported,
         )
         .unwrap();
-        let packet = OutboundPacket::approved(vec![1, 2, 3], approval).unwrap();
+        let packet =
+            OutboundPacket::approved(request(CommandId::SetBeeperConfig, &[1, 2, 3, 4]), approval)
+                .unwrap();
         assert_eq!(packet.class(), WriteCommandClass::TransientConfig);
         assert_eq!(packet.approved_target(), Some(ExecutionTarget::Replay));
         assert_eq!(
             packet.approved_recovery(),
             Some(RecoveryClass::RestoreFromBackupSupported)
+        );
+    }
+
+    #[test]
+    fn packet_construction_refuses_relabelled_commands_and_borrowed_approval() {
+        let set = request(CommandId::SetBeeperConfig, &[1, 2, 3, 4]);
+        assert_eq!(
+            OutboundPacket::read_only(set),
+            Err(BoundaryError::PacketRequiresApproval {
+                actual: WriteCommandClass::TransientConfig,
+            })
+        );
+
+        let transient = authorize_write(
+            ExecutionTarget::Mock,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        assert_eq!(
+            OutboundPacket::approved(request(CommandId::ApiVersion, &[]), transient.clone()),
+            Err(BoundaryError::PacketClassMismatch {
+                actual: WriteCommandClass::NoWrite,
+                approved: WriteCommandClass::TransientConfig,
+            })
+        );
+        assert_eq!(
+            OutboundPacket::approved(request(CommandId::EepromWrite, &[]), transient),
+            Err(BoundaryError::PacketClassMismatch {
+                actual: WriteCommandClass::PersistentConfig,
+                approved: WriteCommandClass::TransientConfig,
+            })
         );
     }
 
@@ -614,6 +728,26 @@ mod tests {
     }
 
     #[test]
+    fn only_the_exact_pending_transport_can_be_cancelled() {
+        let mut coordinator = IoCoordinator::new();
+        let effect = coordinator
+            .begin_transport(TransportEffect::OpenSelectedReadOnlyPort)
+            .unwrap();
+        let expected = effect.request_id();
+        let stale = RequestId(expected.get() + 1);
+        assert_eq!(
+            coordinator.cancel_transport(stale),
+            Err(BoundaryError::RequestIdMismatch {
+                expected,
+                received: stale,
+            })
+        );
+        assert!(coordinator.has_pending_transport());
+        coordinator.cancel_transport(expected).unwrap();
+        assert!(!coordinator.has_pending_transport());
+    }
+
+    #[test]
     fn storage_commits_are_revision_checked_and_non_empty() {
         let mut coordinator = IoCoordinator::new();
         assert_eq!(
@@ -650,7 +784,8 @@ mod tests {
         let key_debug = format!("{storage_key:?}");
         assert!(!key_debug.contains("case-sensitive-key"));
 
-        let packet = OutboundPacket::read_only(sensitive_bytes.clone()).unwrap();
+        let packet =
+            OutboundPacket::read_only(request(CommandId::ApiVersion, &sensitive_bytes)).unwrap();
         let packet_debug = format!("{packet:?}");
         assert!(!packet_debug.contains(sensitive_text));
         assert!(packet_debug.contains("byte_len"));

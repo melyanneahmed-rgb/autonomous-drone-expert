@@ -192,7 +192,27 @@ impl Executor {
         command: CommandId,
         payload: &[u8],
     ) -> Result<Frame, ExecError> {
-        let result = self.exchange_inner(transport, command, payload);
+        let result = self.exchange_inner(transport, command, payload, None);
+        if result.is_err() {
+            self.correlator = Correlator::new();
+        }
+        result
+    }
+
+    fn exchange_with_approval<T: LogicalTransport>(
+        &mut self,
+        transport: &mut T,
+        command: CommandId,
+        payload: &[u8],
+        approval: &WriteApproval,
+        declared_recovery: RecoveryClass,
+    ) -> Result<Frame, ExecError> {
+        let result = self.exchange_inner(
+            transport,
+            command,
+            payload,
+            Some((approval, declared_recovery)),
+        );
         if result.is_err() {
             self.correlator = Correlator::new();
         }
@@ -204,10 +224,16 @@ impl Executor {
         transport: &mut T,
         command: CommandId,
         payload: &[u8],
+        approval: Option<(&WriteApproval, RecoveryClass)>,
     ) -> Result<Frame, ExecError> {
         let request = encode_frame(Direction::Request, command, payload)?;
         self.correlator.on_request(command);
-        let reply_bytes = transport.exchange(&request)?;
+        let reply_bytes = match approval {
+            Some((approval, declared_recovery)) => {
+                transport.exchange_with_approval(&request, approval, declared_recovery)?
+            }
+            None => transport.exchange(&request)?,
+        };
         let frame = decode_frame(&reply_bytes)?;
         if matches!(frame.direction, Direction::Request) {
             return Err(ExecError::ReplyDirectionInvalid);
@@ -285,7 +311,13 @@ impl Executor {
             }
             WriteOperation::SaveEeprom | WriteOperation::Reboot => Vec::new(),
         };
-        let frame = self.exchange(transport, operation.command(), &payload)?;
+        let frame = self.exchange_with_approval(
+            transport,
+            operation.command(),
+            &payload,
+            approval,
+            declared_recovery,
+        )?;
         if frame.payload_len() != 0 {
             return Err(ExecError::WriteAckNotEmpty {
                 command: frame.command,
@@ -372,6 +404,15 @@ mod tests {
             Ok(())
         }
         fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, TransportError> {
+            self.requests.push(request.to_vec());
+            Ok(self.reply.clone())
+        }
+        fn exchange_with_approval(
+            &mut self,
+            request: &[u8],
+            _approval: &WriteApproval,
+            _declared_recovery: RecoveryClass,
+        ) -> Result<Vec<u8>, TransportError> {
             self.requests.push(request.to_vec());
             Ok(self.reply.clone())
         }

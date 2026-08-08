@@ -112,6 +112,7 @@ dependencies = [
 name = "ade-runtime-ports"
 version = "0.0.0"
 dependencies = [
+ "ade-protocol-msp",
  "ade-safety",
 ]
 
@@ -131,6 +132,8 @@ name = "ade-transport"
 version = "0.0.0"
 dependencies = [
  "ade-protocol-msp",
+ "ade-runtime-ports",
+ "ade-safety",
 ]
 
 [[package]]
