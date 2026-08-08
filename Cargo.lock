@@ -22,7 +22,15 @@ version = "0.0.0"
 dependencies = [
  "ade-backup",
  "ade-facts",
+ "ade-runtime-ports",
  "ade-safety",
+]
+
+[[package]]
+name = "ade-casebook-native"
+version = "0.0.0"
+dependencies = [
+ "ade-casebook",
 ]
 
 [[package]]
@@ -112,6 +120,7 @@ dependencies = [
 name = "ade-runtime-ports"
 version = "0.0.0"
 dependencies = [
+ "ade-protocol-msp",
  "ade-safety",
 ]
 
@@ -131,6 +140,8 @@ name = "ade-transport"
 version = "0.0.0"
 dependencies = [
  "ade-protocol-msp",
+ "ade-runtime-ports",
+ "ade-safety",
 ]
 
 [[package]]

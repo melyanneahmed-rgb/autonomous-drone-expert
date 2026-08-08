@@ -19,6 +19,11 @@
 //!   [`AuditDisposition::BlockedNotSent`], metadata only.
 
 use ade_protocol_msp::{CommandId, Direction, MspError, decode_frame};
+use ade_runtime_ports::{
+    BoundaryError, IoCoordinator, IoEffect, IoResponse, OutboundPacket, TransportEffect,
+    TransportFailure, TransportResult,
+};
+use ade_safety::{ExecutionTarget, RecoveryClass, WriteApproval, WriteCommandClass};
 use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
@@ -58,6 +63,25 @@ pub enum TransportError {
     ReplayExhausted,
     /// The transport is not open.
     NotOpen,
+    /// An operational write/reboot was attempted without typed approval evidence.
+    WriteApprovalRequired(u8),
+    /// A proven read attempted to borrow write approval evidence.
+    ReadBorrowedWriteApproval(u8),
+    /// The actual command class did not match the approval.
+    ApprovalClassMismatch {
+        actual: WriteCommandClass,
+        approved: WriteCommandClass,
+    },
+    /// The approval's recovery class did not match the lifecycle declaration.
+    ApprovalRecoveryMismatch,
+    /// The approval was issued for a different execution target.
+    ApprovalTargetMismatch,
+    /// A command without a pinned typed classification was refused fail-closed.
+    UnknownCommand(u8),
+    /// The deterministic host-effect boundary refused or mismatched an operation.
+    EffectBoundary(BoundaryError),
+    /// A host adapter returned a stable failure without a more specific logical mapping.
+    HostFailure(TransportFailure),
 }
 
 /// The phase of a session, used to enforce the fail-closed identification allow-list.
@@ -189,6 +213,52 @@ pub fn is_write_command(command: CommandId) -> bool {
         command,
         CommandId::SetBeeperConfig | CommandId::EepromWrite | CommandId::Reboot
     )
+}
+
+/// The actual write class fixed by a pinned command id.
+#[must_use]
+pub const fn command_class(command: CommandId) -> WriteCommandClass {
+    match command {
+        CommandId::SetBeeperConfig => WriteCommandClass::TransientConfig,
+        CommandId::EepromWrite => WriteCommandClass::PersistentConfig,
+        CommandId::Reboot => WriteCommandClass::Reboot,
+        CommandId::ApiVersion
+        | CommandId::FcVariant
+        | CommandId::FcVersion
+        | CommandId::BoardInfo
+        | CommandId::BeeperConfig => WriteCommandClass::NoWrite,
+    }
+}
+
+fn authority_refusal(
+    command: u8,
+    expected_target: ExecutionTarget,
+    approval: Option<(&WriteApproval, RecoveryClass)>,
+) -> Option<TransportError> {
+    let Some(command_id) = CommandId::from_u8(command) else {
+        return Some(TransportError::UnknownCommand(command));
+    };
+    let actual = command_class(command_id);
+    match (actual, approval) {
+        (WriteCommandClass::NoWrite, Some(_)) => {
+            Some(TransportError::ReadBorrowedWriteApproval(command))
+        }
+        (WriteCommandClass::NoWrite, None) => None,
+        (_, None) => Some(TransportError::WriteApprovalRequired(command)),
+        (_, Some((approval, _declared_recovery))) if approval.target() != expected_target => {
+            Some(TransportError::ApprovalTargetMismatch)
+        }
+        (_, Some((approval, _declared_recovery))) if approval.class() != actual => {
+            Some(TransportError::ApprovalClassMismatch {
+                actual,
+                approved: approval.class(),
+            })
+        }
+        (_, Some((approval, declared_recovery))) if approval.recovery() != declared_recovery => {
+            Some(TransportError::ApprovalRecoveryMismatch)
+        }
+        (_, Some(_)) => None,
+    }
 }
 
 /// Whether a command is one of the four identification reads permitted while identifying.
@@ -332,6 +402,19 @@ pub trait LogicalTransport {
     /// A [`TransportError`] on any exchange failure.
     fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, TransportError>;
 
+    /// Send one write/reboot request while retaining the original typed approval and the
+    /// lifecycle's declared recovery class through the transport boundary.
+    ///
+    /// # Errors
+    /// A [`TransportError`] if the actual frame command, approval, recovery, or exchange
+    /// fails. Implementations must refuse before forwarding bytes.
+    fn exchange_with_approval(
+        &mut self,
+        request: &[u8],
+        approval: &WriteApproval,
+        declared_recovery: RecoveryClass,
+    ) -> Result<Vec<u8>, TransportError>;
+
     /// Close the logical connection.
     fn close(&mut self);
 }
@@ -392,7 +475,11 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
         &self.audit
     }
 
-    fn guard_and_audit(&mut self, request: &[u8]) -> Result<(), TransportError> {
+    fn guard_and_audit(
+        &mut self,
+        request: &[u8],
+        approval: Option<(&WriteApproval, RecoveryClass)>,
+    ) -> Result<(), TransportError> {
         let mut entry = audit_entry_for(request)?;
         if matches!(self.phase, Phase::Identifying) {
             if let Some(error) = identify_refusal(entry.command) {
@@ -402,6 +489,11 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
                 self.audit.record(entry);
                 return Err(error);
             }
+        }
+        if let Some(error) = authority_refusal(entry.command, ExecutionTarget::Mock, approval) {
+            entry.disposition = AuditDisposition::BlockedNotSent;
+            self.audit.record(entry);
+            return Err(error);
         }
         self.audit.record(entry);
         Ok(())
@@ -420,7 +512,21 @@ impl<R: FrameResponder, A: AuditSink> LogicalTransport for MockTransport<R, A> {
             return Err(TransportError::NotOpen);
         }
         self.control.check()?;
-        self.guard_and_audit(request)?;
+        self.guard_and_audit(request, None)?;
+        self.responder.respond(request)
+    }
+
+    fn exchange_with_approval(
+        &mut self,
+        request: &[u8],
+        approval: &WriteApproval,
+        declared_recovery: RecoveryClass,
+    ) -> Result<Vec<u8>, TransportError> {
+        if !self.open {
+            return Err(TransportError::NotOpen);
+        }
+        self.control.check()?;
+        self.guard_and_audit(request, Some((approval, declared_recovery)))?;
         self.responder.respond(request)
     }
 
@@ -583,6 +689,58 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
                 return Err(self.record_divergence(error));
             }
         }
+        if let Some(error) = authority_refusal(entry.command, ExecutionTarget::Replay, None) {
+            let mut blocked = entry;
+            blocked.disposition = AuditDisposition::BlockedNotSent;
+            self.audit.record(blocked);
+            return Err(self.record_divergence(error));
+        }
+        self.exchange_after_guard(request, entry)
+    }
+
+    fn exchange_with_approval(
+        &mut self,
+        request: &[u8],
+        approval: &WriteApproval,
+        declared_recovery: RecoveryClass,
+    ) -> Result<Vec<u8>, TransportError> {
+        if !self.open {
+            return Err(TransportError::NotOpen);
+        }
+        self.control.check()?;
+        let entry = audit_entry_for(request)?;
+        if matches!(self.phase, Phase::Identifying) {
+            if let Some(error) = identify_refusal(entry.command) {
+                let mut blocked = entry;
+                blocked.disposition = AuditDisposition::BlockedNotSent;
+                self.audit.record(blocked);
+                return Err(self.record_divergence(error));
+            }
+        }
+        if let Some(error) = authority_refusal(
+            entry.command,
+            ExecutionTarget::Replay,
+            Some((approval, declared_recovery)),
+        ) {
+            let mut blocked = entry;
+            blocked.disposition = AuditDisposition::BlockedNotSent;
+            self.audit.record(blocked);
+            return Err(self.record_divergence(error));
+        }
+        self.exchange_after_guard(request, entry)
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+    }
+}
+
+impl<A: AuditSink> ReplayTransport<A> {
+    fn exchange_after_guard(
+        &mut self,
+        request: &[u8],
+        entry: AuditEntry,
+    ) -> Result<Vec<u8>, TransportError> {
         if self.cursor >= self.steps.len() {
             self.audit.record(entry);
             return Err(self.record_divergence(TransportError::ReplayExhausted));
@@ -608,10 +766,6 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
             ReplayResponse::Injected(error) => Err(error),
         }
     }
-
-    fn close(&mut self) {
-        self.open = false;
-    }
 }
 
 impl<A: AuditSink> PhasedTransport for ReplayTransport<A> {
@@ -630,16 +784,396 @@ impl AuditAccess for ReplayTransport<InMemoryAudit> {
     }
 }
 
+/// A synchronous test/native bridge for host-owned transport effects.
+///
+/// The production browser boundary remains asynchronous. This trait lets the established
+/// synchronous M1 lifecycle exercise exactly the same typed effects without introducing a
+/// second executor or lifecycle. Host code receives an [`IoEffect`] only after packet
+/// authority has been validated.
+pub trait TransportEffectHost {
+    /// Execute one already-authorised transport effect and return its typed response.
+    ///
+    /// A logical transport error is returned outside [`IoResponse`] so Mock/Replay fault
+    /// classifications remain lossless in parity tests.
+    fn execute(&mut self, effect: IoEffect) -> Result<IoResponse, TransportError>;
+    /// Propagate the lifecycle phase to the host transport.
+    fn enter_operational(&mut self);
+    /// Re-arm the identification allow-list on the host transport.
+    fn begin_identification(&mut self);
+    /// Expose only the existing metadata audit.
+    fn audit_entries(&self) -> &[AuditEntry];
+}
+
+/// Adapts an established logical Mock/Replay transport into a host-effect responder.
+#[derive(Debug)]
+pub struct LogicalEffectHost<T> {
+    target: ExecutionTarget,
+    inner: T,
+}
+
+impl<T> LogicalEffectHost<T> {
+    #[must_use]
+    pub const fn new(target: ExecutionTarget, inner: T) -> Self {
+        Self { target, inner }
+    }
+
+    #[must_use]
+    pub const fn inner(&self) -> &T {
+        &self.inner
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
+
+impl<T: LogicalTransport + PhasedTransport + AuditAccess> TransportEffectHost
+    for LogicalEffectHost<T>
+{
+    fn execute(&mut self, effect: IoEffect) -> Result<IoResponse, TransportError> {
+        let IoEffect::Transport { request_id, effect } = effect else {
+            return Err(TransportError::EffectBoundary(
+                BoundaryError::ResponseKindMismatch,
+            ));
+        };
+        let result = match effect {
+            TransportEffect::OpenSelectedReadOnlyPort => {
+                self.inner.open()?;
+                TransportResult::Open(Ok(()))
+            }
+            TransportEffect::Exchange(packet) => {
+                let reply = match packet.approval() {
+                    Some(approval) => {
+                        if approval.target() != self.target {
+                            return Err(TransportError::ApprovalTargetMismatch);
+                        }
+                        self.inner.exchange_with_approval(
+                            packet.bytes(),
+                            approval,
+                            packet
+                                .approved_recovery()
+                                .expect("approved packet retains recovery evidence"),
+                        )?
+                    }
+                    None => self.inner.exchange(packet.bytes())?,
+                };
+                TransportResult::Exchange(Ok(reply))
+            }
+            TransportEffect::Close => {
+                self.inner.close();
+                TransportResult::Close(Ok(()))
+            }
+        };
+        Ok(IoResponse::Transport { request_id, result })
+    }
+
+    fn enter_operational(&mut self) {
+        self.inner.enter_operational();
+    }
+
+    fn begin_identification(&mut self) {
+        self.inner.begin_identification();
+    }
+
+    fn audit_entries(&self) -> &[AuditEntry] {
+        self.inner.audit_entries()
+    }
+}
+
+/// The current M1 [`LogicalTransport`] driven through typed host effects.
+///
+/// This is an adapter around the existing executor/lifecycle, not an alternate execution
+/// path. The host cannot observe command bytes until the actual frame command has been
+/// classified and all target/class/recovery approval evidence has matched.
+#[derive(Debug)]
+pub struct EffectTransport<H> {
+    target: ExecutionTarget,
+    coordinator: IoCoordinator,
+    host: H,
+}
+
+impl<H> EffectTransport<H> {
+    #[must_use]
+    pub fn new(target: ExecutionTarget, host: H) -> Self {
+        Self {
+            target,
+            coordinator: IoCoordinator::new(),
+            host,
+        }
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> ExecutionTarget {
+        self.target
+    }
+
+    #[must_use]
+    pub const fn host(&self) -> &H {
+        &self.host
+    }
+
+    #[must_use]
+    pub fn into_host(self) -> H {
+        self.host
+    }
+}
+
+impl<H: TransportEffectHost> EffectTransport<H> {
+    fn round_trip(&mut self, effect: IoEffect) -> Result<IoResponse, TransportError> {
+        let request_id = effect.request_id();
+        match self.host.execute(effect) {
+            Ok(response) => self
+                .coordinator
+                .accept(response)
+                .map_err(TransportError::EffectBoundary),
+            Err(error) => {
+                self.coordinator
+                    .cancel_transport(request_id)
+                    .map_err(TransportError::EffectBoundary)?;
+                Err(error)
+            }
+        }
+    }
+
+    fn exchange_packet(&mut self, packet: OutboundPacket) -> Result<Vec<u8>, TransportError> {
+        let effect = self
+            .coordinator
+            .begin_transport(TransportEffect::Exchange(packet))
+            .map_err(TransportError::EffectBoundary)?;
+        match self.round_trip(effect)? {
+            IoResponse::Transport {
+                result: TransportResult::Exchange(result),
+                ..
+            } => result.map_err(map_host_failure),
+            _ => Err(TransportError::EffectBoundary(
+                BoundaryError::ResponseKindMismatch,
+            )),
+        }
+    }
+}
+
+fn map_host_failure(failure: TransportFailure) -> TransportError {
+    match failure {
+        TransportFailure::PortBusy => TransportError::PortBusy,
+        TransportFailure::PermissionDenied => TransportError::PermissionDenied,
+        TransportFailure::MissingDriver => TransportError::MissingDriver,
+        TransportFailure::Disconnected => TransportError::Disconnected,
+        TransportFailure::Timeout => TransportError::Timeout,
+        TransportFailure::Cancelled => TransportError::Cancelled,
+        TransportFailure::Unknown => TransportError::HostFailure(failure),
+    }
+}
+
+impl<H: TransportEffectHost> LogicalTransport for EffectTransport<H> {
+    fn open(&mut self) -> Result<(), TransportError> {
+        let effect = self
+            .coordinator
+            .begin_transport(TransportEffect::OpenSelectedReadOnlyPort)
+            .map_err(TransportError::EffectBoundary)?;
+        match self.round_trip(effect)? {
+            IoResponse::Transport {
+                result: TransportResult::Open(result),
+                ..
+            } => result.map_err(map_host_failure),
+            _ => Err(TransportError::EffectBoundary(
+                BoundaryError::ResponseKindMismatch,
+            )),
+        }
+    }
+
+    fn exchange(&mut self, request: &[u8]) -> Result<Vec<u8>, TransportError> {
+        let packet =
+            OutboundPacket::read_only(request.to_vec()).map_err(TransportError::EffectBoundary)?;
+        self.exchange_packet(packet)
+    }
+
+    fn exchange_with_approval(
+        &mut self,
+        request: &[u8],
+        approval: &WriteApproval,
+        declared_recovery: RecoveryClass,
+    ) -> Result<Vec<u8>, TransportError> {
+        if approval.target() != self.target {
+            return Err(TransportError::ApprovalTargetMismatch);
+        }
+        if approval.recovery() != declared_recovery {
+            return Err(TransportError::ApprovalRecoveryMismatch);
+        }
+        let packet = OutboundPacket::approved(request.to_vec(), approval.clone())
+            .map_err(TransportError::EffectBoundary)?;
+        self.exchange_packet(packet)
+    }
+
+    fn close(&mut self) {
+        let Ok(effect) = self.coordinator.begin_transport(TransportEffect::Close) else {
+            return;
+        };
+        let _ = self.round_trip(effect);
+    }
+}
+
+impl<H: TransportEffectHost> PhasedTransport for EffectTransport<H> {
+    fn enter_operational(&mut self) {
+        self.host.enter_operational();
+    }
+
+    fn begin_identification(&mut self) {
+        self.host.begin_identification();
+    }
+}
+
+impl<H: TransportEffectHost> AuditAccess for EffectTransport<H> {
+    fn audit_entries(&self) -> &[AuditEntry] {
+        self.host.audit_entries()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ade_protocol_msp::{CommandId, SetBeeperConfig, encode_frame};
+    use ade_safety::authorize_write;
 
     struct EchoOk;
     impl FrameResponder for EchoOk {
         fn respond(&mut self, _request: &[u8]) -> Result<Vec<u8>, TransportError> {
             Ok(encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap())
         }
+    }
+
+    fn request_with_payload(command: CommandId, payload: &[u8]) -> Vec<u8> {
+        encode_frame(Direction::Request, command, payload).unwrap()
+    }
+
+    fn set_request() -> Vec<u8> {
+        request_with_payload(
+            CommandId::SetBeeperConfig,
+            &SetBeeperConfig::new(7).payload(),
+        )
+    }
+
+    #[test]
+    fn operational_write_without_approval_never_reaches_responder_or_replay_cursor() {
+        let mut mock = MockTransport::new(CountingOk { calls: 0 }, InMemoryAudit::new());
+        mock.open().unwrap();
+        mock.enter_operational();
+        assert_eq!(
+            mock.exchange(&set_request()),
+            Err(TransportError::WriteApprovalRequired(
+                CommandId::SetBeeperConfig.as_u8()
+            ))
+        );
+        assert_eq!(mock.responder.calls, 0);
+        assert_eq!(
+            mock.audit.entries()[0].disposition,
+            AuditDisposition::BlockedNotSent
+        );
+
+        let mut replay = ReplayTransport::new(
+            vec![ReplayStep {
+                expected_request: set_request(),
+                response: ReplayResponse::Reply(request_with_payload(
+                    CommandId::SetBeeperConfig,
+                    &[],
+                )),
+            }],
+            InMemoryAudit::new(),
+        );
+        replay.open().unwrap();
+        replay.enter_operational();
+        assert!(matches!(
+            replay.exchange(&set_request()),
+            Err(TransportError::WriteApprovalRequired(_))
+        ));
+        assert_eq!(
+            replay.cursor, 0,
+            "blocked write must not move replay cursor"
+        );
+        assert_eq!(
+            replay.audit.entries()[0].disposition,
+            AuditDisposition::BlockedNotSent
+        );
+    }
+
+    #[test]
+    fn effect_transport_refuses_authority_mismatches_before_host_bytes() {
+        let host = LogicalEffectHost::new(
+            ExecutionTarget::Mock,
+            MockTransport::new(EchoOk, InMemoryAudit::new()),
+        );
+        let mut effect = EffectTransport::new(ExecutionTarget::Mock, host);
+        effect.open().unwrap();
+        effect.enter_operational();
+
+        assert!(matches!(
+            effect.exchange(&set_request()),
+            Err(TransportError::EffectBoundary(
+                BoundaryError::PacketRequiresApproval { .. }
+            ))
+        ));
+
+        let replay_approval = authorize_write(
+            ExecutionTarget::Replay,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        assert_eq!(
+            effect.exchange_with_approval(
+                &set_request(),
+                &replay_approval,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+            Err(TransportError::ApprovalTargetMismatch)
+        );
+
+        let transient = authorize_write(
+            ExecutionTarget::Mock,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        assert_eq!(
+            effect.exchange_with_approval(
+                &set_request(),
+                &transient,
+                RecoveryClass::RestoreFromBackupSupported,
+            ),
+            Err(TransportError::ApprovalRecoveryMismatch)
+        );
+
+        let persistent = authorize_write(
+            ExecutionTarget::Mock,
+            WriteCommandClass::PersistentConfig,
+            RecoveryClass::AutomaticRollbackSupported,
+        )
+        .unwrap();
+        assert!(matches!(
+            effect.exchange_with_approval(
+                &set_request(),
+                &persistent,
+                RecoveryClass::AutomaticRollbackSupported,
+            ),
+            Err(TransportError::EffectBoundary(
+                BoundaryError::PacketClassMismatch { .. }
+            ))
+        ));
+
+        assert!(matches!(
+            effect.exchange_with_approval(
+                &request_with_payload(CommandId::ApiVersion, &[]),
+                &transient,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+            Err(TransportError::EffectBoundary(
+                BoundaryError::PacketClassMismatch { .. }
+            ))
+        ));
+        assert!(
+            effect.audit_entries().is_empty(),
+            "host transport must not see rejected command bytes"
+        );
     }
 
     /// A responder that counts how many requests actually reached it.
@@ -651,6 +1185,64 @@ mod tests {
             self.calls += 1;
             Ok(encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap())
         }
+    }
+
+    #[test]
+    fn direct_transports_refuse_cross_target_approval_before_responder_or_cursor() {
+        let replay_approval = authorize_write(
+            ExecutionTarget::Replay,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        let mut mock = MockTransport::new(CountingOk { calls: 0 }, InMemoryAudit::new());
+        mock.open().unwrap();
+        mock.enter_operational();
+        assert_eq!(
+            mock.exchange_with_approval(
+                &set_request(),
+                &replay_approval,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+            Err(TransportError::ApprovalTargetMismatch)
+        );
+        assert_eq!(mock.responder.calls, 0);
+        assert_eq!(
+            mock.audit.entries()[0].disposition,
+            AuditDisposition::BlockedNotSent
+        );
+
+        let mock_approval = authorize_write(
+            ExecutionTarget::Mock,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        let mut replay = ReplayTransport::new(
+            vec![ReplayStep {
+                expected_request: set_request(),
+                response: ReplayResponse::Reply(request_with_payload(
+                    CommandId::SetBeeperConfig,
+                    &[],
+                )),
+            }],
+            InMemoryAudit::new(),
+        );
+        replay.open().unwrap();
+        replay.enter_operational();
+        assert_eq!(
+            replay.exchange_with_approval(
+                &set_request(),
+                &mock_approval,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+            Err(TransportError::ApprovalTargetMismatch)
+        );
+        assert_eq!(replay.cursor, 0);
+        assert_eq!(
+            replay.audit.entries()[0].disposition,
+            AuditDisposition::BlockedNotSent
+        );
     }
 
     fn read_frame() -> Vec<u8> {
@@ -705,7 +1297,20 @@ mod tests {
         // Once operational, the same write goes through and is audited as Sent — the log now
         // distinguishes the blocked attempt from the real send.
         t.enter_operational();
-        assert!(t.exchange(&write_frame()).is_ok());
+        let approval = authorize_write(
+            ExecutionTarget::Mock,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        assert!(
+            t.exchange_with_approval(
+                &write_frame(),
+                &approval,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            )
+            .is_ok()
+        );
         let entries = t.audit().entries();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].disposition, AuditDisposition::Sent);
