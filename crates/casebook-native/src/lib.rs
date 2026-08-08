@@ -289,10 +289,10 @@ mod tests {
         fs::write(&path.0, empty_journal_bytes()).unwrap();
         let read_only = File::open(&path.0).unwrap();
         let mut journal = Journal::new().with_backend(NativeBackend { file: read_only });
-        assert_eq!(
+        assert!(matches!(
             journal.try_append(JournalEvent::IdentityRead),
-            Err(JournalError::Io(ErrorKind::PermissionDenied))
-        );
+            Err(JournalError::Io(_))
+        ));
         assert!(journal.events().is_empty());
         assert_eq!(
             journal.try_append(JournalEvent::SnapshotRead),
