@@ -26,6 +26,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ade-casebook-native"
+version = "0.0.0"
+dependencies = [
+ "ade-casebook",
+]
+
+[[package]]
 name = "ade-core-api"
 version = "0.0.0"
 dependencies = [

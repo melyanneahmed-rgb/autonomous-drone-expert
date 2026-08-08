@@ -1,0 +1,11 @@
+[package]
+name = "ade-casebook-native"
+description = "Native filesystem durability adapter for the ADEJ case journal."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# First-party workspace path dependencies only (ADR-0009).
+[dependencies]
+ade-casebook = { path = "../casebook" }

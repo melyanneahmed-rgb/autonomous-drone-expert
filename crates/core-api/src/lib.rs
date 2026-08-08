@@ -967,7 +967,7 @@ pub fn run_beeper_lifecycle<T: LogicalTransport + PhasedTransport + AuditAccess>
 
 /// Run the M1 lifecycle with a caller-supplied journal.
 ///
-/// Supplying a journal returned by [`Journal::open`] makes every lifecycle checkpoint and
+/// Supplying a journal with an attached durable backend makes every lifecycle checkpoint and
 /// write-ahead event durable under that journal's byte bound. The established
 /// [`run_beeper_lifecycle`] convenience API remains an in-memory simulation.
 pub fn run_beeper_lifecycle_with_journal<T: LogicalTransport + PhasedTransport + AuditAccess>(
