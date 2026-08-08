@@ -16,9 +16,12 @@ name: CI
 
 on:
   push:
-    # Keep the protected branch gate and provide a direct validation path for
-    # the active M1 branch while pull-request event delivery is being repaired.
-    branches: [main, feature/m1-beeper-mock-replay, continuation/m1-acceptance-hardening]
+    # Keep the protected branch gate and direct validation paths for active feature work.
+    branches:
+      - main
+      - feature/m1-beeper-mock-replay
+      - continuation/m1-acceptance-hardening
+      - feat/m2-web-dependency-policy
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -45,6 +48,9 @@ jobs:
 
       - name: Isolation, dependency and publication gates
         run: python3 scripts/check_isolation.py
+
+      - name: Audited Web dependency and repository gate
+        run: python3 scripts/check_web_dependencies.py
 
       - name: Unsafe-Rust gate
         run: python3 scripts/check_forbid_unsafe.py

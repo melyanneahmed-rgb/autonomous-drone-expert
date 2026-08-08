@@ -1,18 +1,15 @@
-# Initial cargo-deny policy.
-#
-# STATUS: policy skeleton only. This file is NOT yet enforced in CI, because this batch
-# contains zero dependencies and cargo-deny is not yet installed as a reviewed tool.
-# The dependency audit is NOT complete and must not be described as complete until:
-#   1. a real dependency list exists,
-#   2. cargo-deny is pinned and enabled as a required CI check,
-#   3. every allowed license below has been consciously reviewed.
-# See docs/m0/foundations-gate.md section 3 and docs/adr/ADR-0004.
+# Required cargo-deny policy for the Rust workspace. CI pins cargo-deny 0.20.2 and runs all
+# four checks. ADR-0009 still prohibits every external Rust dependency; the current graph
+# therefore contains first-party workspace path dependencies only.
 
 [graph]
 all-features = true
 
 [advisories]
 version = 2
+# Keep the mutable advisory database in ignored build output. This avoids relying on a
+# writable user profile in sandboxed development while preserving live database updates.
+db-path = "target/cargo-deny-advisory-dbs"
 yanked = "deny"
 unmaintained = "all"
 
