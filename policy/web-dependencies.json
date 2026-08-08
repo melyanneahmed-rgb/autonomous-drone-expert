@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "policy_state": "contract-only",
+  "web_root": "web",
+  "manifest_name": "@autonomous-drone-expert/web",
+  "package_manager": {
+    "name": "npm",
+    "version": "11.13.0",
+    "lockfile_version": 3
+  },
+  "approved_lockfile_sha256": null,
+  "direct_dependencies": {
+    "production": {
+      "react": {
+        "version": "19.2.6",
+        "license": "MIT",
+        "reason": "Browser component and state model for the approved Site v3 interaction design."
+      },
+      "react-dom": {
+        "version": "19.2.6",
+        "license": "MIT",
+        "reason": "Browser renderer for React; scheduler is its only audited runtime transitive dependency."
+      }
+    },
+    "development": {
+      "@types/node": {
+        "version": "22.19.19",
+        "license": "MIT",
+        "reason": "Types for the pinned Vite and TypeScript build configuration only."
+      },
+      "@types/react": {
+        "version": "19.2.14",
+        "license": "MIT",
+        "reason": "Compile-time React types only."
+      },
+      "@types/react-dom": {
+        "version": "19.2.3",
+        "license": "MIT",
+        "reason": "Compile-time React DOM types only."
+      },
+      "typescript": {
+        "version": "5.9.3",
+        "license": "Apache-2.0",
+        "reason": "Strict static checking for the approved TypeScript source."
+      },
+      "vite": {
+        "version": "8.0.13",
+        "license": "MIT",
+        "reason": "Development server and deterministic static production build; no browser runtime code."
+      }
+    }
+  },
+  "allowed_root_scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "allowed_registry_hosts": [
+    "registry.npmjs.org"
+  ],
+  "allowed_licenses": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "MPL-2.0"
+  ],
+  "allowed_install_scripts": [
+    {
+      "name": "fsevents",
+      "version": "2.3.3",
+      "require_dev": true,
+      "require_optional": true,
+      "reason": "Audited optional macOS file-watcher fallback in the Site v3 Vite lock closure."
+    }
+  ],
+  "allowed_optional_android_prebuilts": [
+    {
+      "name": "@rolldown/binding-android-arm64",
+      "version": "1.0.1",
+      "require_dev": true,
+      "require_optional": true,
+      "reason": "Audited optional cross-platform Rolldown build binary; not an Android product dependency."
+    },
+    {
+      "name": "lightningcss-android-arm64",
+      "version": "1.32.0",
+      "require_dev": true,
+      "require_optional": true,
+      "reason": "Audited optional cross-platform CSS build binary; not an Android product dependency."
+    }
+  ],
+  "forbidden_android_tokens": [
+    "@capacitor/",
+    "@cordova/",
+    "@expo/",
+    "@ionic/",
+    "@nativescript/",
+    "@react-native/",
+    "android",
+    "capacitor",
+    "cordova",
+    "expo",
+    "nativescript",
+    "react-native"
+  ]
+}

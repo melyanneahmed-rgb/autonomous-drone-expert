@@ -1,4 +1,0 @@
-# Structural pnpm workspace. The Web/PWA source enters only with its dedicated dependency
-# audit and CI gates; this correction gate introduces no JavaScript runtime dependency.
-packages:
-  - "ui"

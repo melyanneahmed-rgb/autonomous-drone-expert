@@ -65,6 +65,8 @@ lifecycle. It does not depend on, import from, or share code with any other repo
 | Hardware support matrix | `docs/hardware-support-matrix/README.md` |
 | M1 simulation acceptance candidate | `docs/m1/README.md` |
 | M2 Product Core boundary | `docs/m2/README.md` |
+| Web dependency audit and policy | `docs/m2/WEB-DEPENDENCY-AUDIT.md` |
+| Approved Site v3 provenance boundary | `docs/m2/SMART-CONFIGURATOR-SITE-V3-PROVENANCE.md` |
 | Binding product contract | `docs/product/PRODUCT-CONTRACT.md` |
 
 ## Licensing

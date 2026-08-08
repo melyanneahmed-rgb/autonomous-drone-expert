@@ -3,9 +3,9 @@
 **/*.rs.bk
 *.pdb
 
-# Node / pnpm (structural workspace only; no runtime dependencies yet)
+# Node / npm (policy-only Web package; no runtime dependencies integrated yet)
 node_modules/
-.pnpm-store/
+.npm/
 dist/
 build/
 *.tsbuildinfo
