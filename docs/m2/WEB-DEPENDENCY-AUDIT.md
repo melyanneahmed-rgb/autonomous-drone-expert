@@ -1,16 +1,17 @@
 # M2 Web dependency audit
 
-- **Audit date:** 2026-08-08
-- **Decision:** Option B — minimal audited Web stack, contract-only
-- **Reference lock:** verified Site v3 `package-lock.json` (lockfile v3)
-- **Network result:** a fresh npm lock generation was blocked by the local registry network
-  policy. No package was installed and no unverified lock was accepted.
+- **Initial candidate audit:** 2026-08-08 (contract-only; Site v3 reference lock)
+- **Integration lock audit:** 2026-08-09 (fresh host-generated minimal lock)
+- **Decision:** Option B — minimal audited Web stack, locked
+- **Accepted lock SHA-256:** `c3015e9454da094d307975921b8aa2c195a15b9dffe0498a9c758b57d922c05d`
+- **Network result:** the Codex sandbox remained registry-blocked, so the owner generated the
+  fresh lock with npm 11.13.0 on the proven-working Windows host. Codex then independently
+  verified the files, complete closure, digest and saved npm audit JSON before import.
 
 ## Accepted direct candidates
 
-These versions reproduce the minimal relevant portion of the approved Site v3 stack. They
-are recorded in the policy, but cannot enter the repository until a fresh minimal lock
-closure is reviewed and its SHA-256 replaces the current null digest.
+These exact versions are represented by the reviewed fresh lock. Vite 8.2.1 supersedes the
+earlier 8.0.13 candidate before any package installation or UI integration.
 
 | Class | Package | Exact version | License | Audited transitive count | Install/native/network/footprint assessment | Why needed |
 | --- | --- | ---: | --- | ---: | --- | --- |
@@ -20,11 +21,11 @@ closure is reviewed and its SHA-256 replaces the current null digest.
 | Development | `@types/react` | 19.2.14 | MIT | 1 | Types only; pulls `csstype`; no runtime footprint | Strict TSX checking |
 | Development | `@types/react-dom` | 19.2.3 | MIT | 0 | Types only; no runtime footprint | Strict DOM renderer checking |
 | Development | `typescript` | 5.9.3 | Apache-2.0 | 0 | Build-time compiler; no install script/native binary/runtime network | Deterministic strict checking |
-| Development | `vite` | 8.0.13 | MIT | 46 | Build/dev only; Rolldown and Lightning CSS use audited optional platform binaries; dev server is local; about 15 MB larger than Vite 7 upstream | Minimal TSX dev server and static production bundler |
+| Development | `vite` | 8.2.1 | MIT | 40 | Build/dev only; Rolldown and Lightning CSS use audited optional platform binaries; dev server is local | Minimal TSX dev server and static production bundler |
 
-The combined closure observed in the verified Site lock is 56 unique packages including
-the seven direct candidates (49 unique transitives). License counts are: MIT 39,
-Apache-2.0 2, ISC 1, BSD-3-Clause 1, 0BSD 1 and MPL-2.0 12.
+The accepted fresh closure is 48 unique packages: seven direct and 41 unique transitives.
+Three entries are production-reachable and 45 are development entries; 26 are optional.
+License counts are: MIT 32, Apache-2.0 2, ISC 1, BSD-3-Clause 1 and MPL-2.0 12.
 
 ### Install scripts and native/prebuilt packages
 
@@ -35,13 +36,14 @@ build hosts. The closure therefore contains platform-specific prebuilt packages 
 Darwin, Linux, Windows, FreeBSD, OpenHarmony, Android and a WASM fallback. They execute only
 as build tooling and do not enter the browser product.
 
-The Android-named Rolldown and Lightning CSS artifacts are not APK dependencies. The gate
-allows only the two exact optional/dev-only records observed in the reference lock and
+The Android-named `@rolldown/binding-android-arm64@1.2.3` and
+`lightningcss-android-arm64@1.33.0` artifacts are not APK dependencies. The gate allows
+only these two exact optional/dev-only records observed in the accepted fresh lock and
 rejects every direct Android/mobile dependency and every other Android-named transitive.
 
 ### Network and runtime behavior
 
-Package installation needs HTTPS access to `registry.npmjs.org`; all 56 observed closure
+Package installation needs HTTPS access to `registry.npmjs.org`; all 48 accepted closure
 entries resolve there and carry SHA-512 integrity. React/React DOM require no product
 network endpoint. Vite's dev server is build tooling only and must not be exposed to an
 untrusted network. Production output is static browser code; the package manager and Vite
@@ -49,15 +51,17 @@ are not production services.
 
 ## Security review
 
-- GitHub's reviewed Vite arbitrary-file-read advisory affects Vite 8.0.0–8.0.4 and is
-  patched in 8.0.5; the candidate 8.0.13 is beyond that fixed version.
+- The 2026-08-08 policy historically evaluated Vite 8.0.13 as a contract-only candidate.
+  A fresh host pre-integration audit later reported a HIGH advisory for that candidate, so
+  it was rejected before installation and is not the accepted product lock.
+- A new exact minimal lock was resolved with Vite 8.2.1. Its saved npm audit JSON reports
+  zero info, low, moderate, high and critical vulnerabilities; Codex independently parsed
+  that evidence and verified the lock pins exactly 8.2.1.
 - The reviewed React Server Components denial-of-service advisory is patched in 19.2.6.
   This policy does not admit any `react-server-dom-*` package or server-component stack.
 - No React, React DOM or TypeScript install hooks were present in the observed closure.
-- A live `npm audit` and newly resolved minimal closure could not be completed under the
-  local registry network restriction. Therefore the lock digest remains null and source
-  integration fails closed. A later integration must repeat advisory review against the
-  exact new lock; this document does not claim the future ecosystem is vulnerability-free.
+- The accepted digest is pinned in machine policy. Any package, version, dependency-class,
+  install-script exception or byte-level lock change fails closed and requires a new audit.
 
 References: [Vite 8 announcement](https://vite.dev/blog/announcing-vite8),
 [Vite GHSA-p9ff-h696-f583](https://github.com/vitejs/vite/security/advisories/GHSA-p9ff-h696-f583),
