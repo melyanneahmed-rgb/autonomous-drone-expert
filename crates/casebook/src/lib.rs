@@ -116,8 +116,8 @@ impl From<std::io::Error> for JournalError {
 
 /// A validated record that has not yet been durably accepted.
 ///
-/// Preparing never mutates the journal. The logical event becomes visible only after a
-/// backend has durably accepted `record_bytes` and [`Journal::accept_prepared`] succeeds.
+/// Preparing never mutates the journal. The logical event becomes visible only after the
+/// crate has accepted proof of backend durability or compare-and-swap success.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PreparedJournalAppend {
     event: JournalEvent,
@@ -564,7 +564,7 @@ impl Journal {
     ///
     /// # Errors
     /// Refuses a stale preparation without changing the journal.
-    pub fn accept_prepared(&mut self, prepared: PreparedJournalAppend) -> Result<(), JournalError> {
+    fn accept_prepared(&mut self, prepared: PreparedJournalAppend) -> Result<(), JournalError> {
         if self.poisoned {
             return Err(JournalError::Poisoned);
         }

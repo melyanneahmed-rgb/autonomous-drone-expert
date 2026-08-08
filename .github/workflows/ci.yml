@@ -137,8 +137,9 @@ jobs:
 
   rust-wasm-core:
     # M2 does not claim that the whole native M1 harness is a browser application. This job
-    # proves the protocol-independent planning and host-effect boundary compile for the
-    # browser target without filesystem, serial, IndexedDB or Web Serial dependencies.
+    # proves the protocol-independent planning, journal, host-effect and core API boundary
+    # compile for the browser target without native filesystem, serial, IndexedDB or Web
+    # Serial dependencies. The native journal adapter is deliberately absent from this list.
     name: rust-wasm-core
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -152,7 +153,9 @@ jobs:
       - name: Check deterministic M2 boundary for WebAssembly
         run: |
           cargo check --target wasm32-unknown-unknown -p ade-planning
+          cargo check --target wasm32-unknown-unknown -p ade-casebook
           cargo check --target wasm32-unknown-unknown -p ade-runtime-ports
+          cargo check --target wasm32-unknown-unknown -p ade-core-api
 
   cargo-deny:
     # Supply-chain gate for the dependency policy (ADR-0009). The workspace may now carry
