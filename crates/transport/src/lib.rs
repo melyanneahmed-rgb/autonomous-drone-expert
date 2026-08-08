@@ -232,6 +232,7 @@ pub const fn command_class(command: CommandId) -> WriteCommandClass {
 
 fn authority_refusal(
     command: u8,
+    expected_target: ExecutionTarget,
     approval: Option<(&WriteApproval, RecoveryClass)>,
 ) -> Option<TransportError> {
     let Some(command_id) = CommandId::from_u8(command) else {
@@ -244,6 +245,9 @@ fn authority_refusal(
         }
         (WriteCommandClass::NoWrite, None) => None,
         (_, None) => Some(TransportError::WriteApprovalRequired(command)),
+        (_, Some((approval, _declared_recovery))) if approval.target() != expected_target => {
+            Some(TransportError::ApprovalTargetMismatch)
+        }
         (_, Some((approval, _declared_recovery))) if approval.class() != actual => {
             Some(TransportError::ApprovalClassMismatch {
                 actual,
@@ -486,7 +490,7 @@ impl<R: FrameResponder, A: AuditSink> MockTransport<R, A> {
                 return Err(error);
             }
         }
-        if let Some(error) = authority_refusal(entry.command, approval) {
+        if let Some(error) = authority_refusal(entry.command, ExecutionTarget::Mock, approval) {
             entry.disposition = AuditDisposition::BlockedNotSent;
             self.audit.record(entry);
             return Err(error);
@@ -685,7 +689,7 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
                 return Err(self.record_divergence(error));
             }
         }
-        if let Some(error) = authority_refusal(entry.command, None) {
+        if let Some(error) = authority_refusal(entry.command, ExecutionTarget::Replay, None) {
             let mut blocked = entry;
             blocked.disposition = AuditDisposition::BlockedNotSent;
             self.audit.record(blocked);
@@ -713,7 +717,11 @@ impl<A: AuditSink> LogicalTransport for ReplayTransport<A> {
                 return Err(self.record_divergence(error));
             }
         }
-        if let Some(error) = authority_refusal(entry.command, Some((approval, declared_recovery))) {
+        if let Some(error) = authority_refusal(
+            entry.command,
+            ExecutionTarget::Replay,
+            Some((approval, declared_recovery)),
+        ) {
             let mut blocked = entry;
             blocked.disposition = AuditDisposition::BlockedNotSent;
             self.audit.record(blocked);
@@ -1177,6 +1185,64 @@ mod tests {
             self.calls += 1;
             Ok(encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap())
         }
+    }
+
+    #[test]
+    fn direct_transports_refuse_cross_target_approval_before_responder_or_cursor() {
+        let replay_approval = authorize_write(
+            ExecutionTarget::Replay,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        let mut mock = MockTransport::new(CountingOk { calls: 0 }, InMemoryAudit::new());
+        mock.open().unwrap();
+        mock.enter_operational();
+        assert_eq!(
+            mock.exchange_with_approval(
+                &set_request(),
+                &replay_approval,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+            Err(TransportError::ApprovalTargetMismatch)
+        );
+        assert_eq!(mock.responder.calls, 0);
+        assert_eq!(
+            mock.audit.entries()[0].disposition,
+            AuditDisposition::BlockedNotSent
+        );
+
+        let mock_approval = authorize_write(
+            ExecutionTarget::Mock,
+            WriteCommandClass::TransientConfig,
+            RecoveryClass::TransientWritePendingReconcileOnResume,
+        )
+        .unwrap();
+        let mut replay = ReplayTransport::new(
+            vec![ReplayStep {
+                expected_request: set_request(),
+                response: ReplayResponse::Reply(request_with_payload(
+                    CommandId::SetBeeperConfig,
+                    &[],
+                )),
+            }],
+            InMemoryAudit::new(),
+        );
+        replay.open().unwrap();
+        replay.enter_operational();
+        assert_eq!(
+            replay.exchange_with_approval(
+                &set_request(),
+                &mock_approval,
+                RecoveryClass::TransientWritePendingReconcileOnResume,
+            ),
+            Err(TransportError::ApprovalTargetMismatch)
+        );
+        assert_eq!(replay.cursor, 0);
+        assert_eq!(
+            replay.audit.entries()[0].disposition,
+            AuditDisposition::BlockedNotSent
+        );
     }
 
     fn read_frame() -> Vec<u8> {

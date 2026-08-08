@@ -952,10 +952,10 @@ fn ensure_revision_advanced(
     current: Option<StorageRevision>,
     received: StorageRevision,
 ) -> Result<(), EffectJournalError> {
-    if let Some(current) = current
-        && received.get() <= current.get()
-    {
-        return Err(EffectJournalError::NonAdvancingRevision { current, received });
+    if let Some(current) = current {
+        if received.get() <= current.get() {
+            return Err(EffectJournalError::NonAdvancingRevision { current, received });
+        }
     }
     Ok(())
 }
