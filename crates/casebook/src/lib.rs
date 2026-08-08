@@ -8,6 +8,10 @@
 //! the case id is supplied by the host and must not be derived from the device.
 
 use ade_facts::DeviceIdentity;
+use ade_runtime_ports::{
+    BoundaryError, IoCoordinator, IoEffect, IoResponse, StorageEffect, StorageFailure, StorageKey,
+    StorageResult, StorageRevision, StoredValue,
+};
 use ade_safety::{ExecutionTarget, RecoveryClass, WriteCommandClass};
 use std::fmt;
 use std::io::ErrorKind;
@@ -114,12 +118,23 @@ impl From<std::io::Error> for JournalError {
 ///
 /// Preparing never mutates the journal. The logical event becomes visible only after a
 /// backend has durably accepted `record_bytes` and [`Journal::accept_prepared`] succeeds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PreparedJournalAppend {
     event: JournalEvent,
     record_bytes: Vec<u8>,
     expected_len: usize,
     next_len: usize,
+}
+
+impl fmt::Debug for PreparedJournalAppend {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedJournalAppend")
+            .field("record_byte_len", &self.record_bytes.len())
+            .field("expected_len", &self.expected_len)
+            .field("next_len", &self.next_len)
+            .finish()
+    }
 }
 
 impl PreparedJournalAppend {
@@ -154,7 +169,6 @@ pub trait JournalBackend: fmt::Debug {
 /// [`Journal::decode`] validates existing ADEJ bytes and identifies only an incomplete final
 /// record as repairable. [`Journal::try_append`] prepares a complete record and, when a
 /// backend is attached, requires durable backend success before making the event visible.
-#[derive(Debug)]
 pub struct Journal {
     events: Vec<JournalEvent>,
     backend: Option<Box<dyn JournalBackend>>,
@@ -162,6 +176,20 @@ pub struct Journal {
     encoded_len: usize,
     last_error: Option<JournalError>,
     poisoned: bool,
+}
+
+impl fmt::Debug for Journal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Journal")
+            .field("event_count", &self.events.len())
+            .field("backend_attached", &self.backend.is_some())
+            .field("max_bytes", &self.max_bytes)
+            .field("encoded_len", &self.encoded_len)
+            .field("last_error", &self.last_error)
+            .field("poisoned", &self.poisoned)
+            .finish()
+    }
 }
 
 impl Default for Journal {
@@ -603,6 +631,335 @@ impl Journal {
     }
 }
 
+/// Why an effect-backed journal load, repair, or append was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffectJournalError {
+    /// The host-I/O coordinator rejected a stale, duplicate, wrong-kind, or overlapping action.
+    Boundary(BoundaryError),
+    /// The host explicitly failed the storage operation.
+    Storage(StorageFailure),
+    /// ADEJ bytes or an append violated the journal contract.
+    Journal(JournalError),
+    /// Append was requested before a load had proven the current bytes and revision.
+    NotLoaded,
+    /// A second load was requested after this store had already established state.
+    AlreadyLoaded,
+    /// A successful host commit did not return a revision newer than the compared revision.
+    NonAdvancingRevision {
+        current: StorageRevision,
+        received: StorageRevision,
+    },
+    /// Internal operation state did not match an accepted coordinator response.
+    OperationStateMismatch,
+}
+
+impl fmt::Display for EffectJournalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for EffectJournalError {}
+
+impl From<BoundaryError> for EffectJournalError {
+    fn from(error: BoundaryError) -> Self {
+        Self::Boundary(error)
+    }
+}
+
+impl From<JournalError> for EffectJournalError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
+/// A state transition proven by one accepted storage response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffectJournalOutcome {
+    /// Load completed and the journal is ready without repair.
+    Loaded,
+    /// The loaded bytes had only an incomplete final record; the returned CAS effect must
+    /// succeed before the repaired journal becomes visible.
+    RepairRequired(IoEffect),
+    /// A prepared append was committed and then accepted into logical state.
+    AppendCommitted,
+    /// A proposed incomplete-final-tail repair was committed and is now visible.
+    RepairCommitted,
+}
+
+struct LoadedEffectJournal {
+    journal: Journal,
+    bytes: Vec<u8>,
+    revision: Option<StorageRevision>,
+}
+
+impl fmt::Debug for LoadedEffectJournal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LoadedEffectJournal")
+            .field("journal", &self.journal)
+            .field("byte_len", &self.bytes.len())
+            .field("revision", &self.revision)
+            .finish()
+    }
+}
+
+enum PendingJournalOperation {
+    Load,
+    Append {
+        prepared: PreparedJournalAppend,
+        bytes: Vec<u8>,
+        expected_revision: Option<StorageRevision>,
+    },
+    Repair {
+        journal: Journal,
+        bytes: Vec<u8>,
+        expected_revision: StorageRevision,
+    },
+}
+
+impl fmt::Debug for PendingJournalOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load => formatter.write_str("Load"),
+            Self::Append {
+                prepared,
+                bytes,
+                expected_revision,
+            } => formatter
+                .debug_struct("Append")
+                .field("prepared", prepared)
+                .field("byte_len", &bytes.len())
+                .field("expected_revision", expected_revision)
+                .finish(),
+            Self::Repair {
+                journal,
+                bytes,
+                expected_revision,
+            } => formatter
+                .debug_struct("Repair")
+                .field("journal", journal)
+                .field("byte_len", &bytes.len())
+                .field("expected_revision", expected_revision)
+                .finish(),
+        }
+    }
+}
+
+/// Backend-neutral ADEJ storage driven through typed load/CAS host effects.
+///
+/// The store never invents a revision. A prepared append or proposed torn-tail repair becomes
+/// visible only after an exact matching host response proves CAS success.
+#[derive(Debug)]
+pub struct EffectJournalStore {
+    key: StorageKey,
+    max_bytes: usize,
+    coordinator: IoCoordinator,
+    loaded: Option<LoadedEffectJournal>,
+    pending: Option<PendingJournalOperation>,
+}
+
+impl EffectJournalStore {
+    /// Create an unloaded effect-backed journal store.
+    ///
+    /// # Errors
+    /// Returns [`JournalError::LimitTooSmall`] through [`EffectJournalError`] before any effect.
+    pub fn new(key: StorageKey, max_bytes: usize) -> Result<Self, EffectJournalError> {
+        Journal::with_limit(max_bytes)?;
+        Ok(Self {
+            key,
+            max_bytes,
+            coordinator: IoCoordinator::new(),
+            loaded: None,
+            pending: None,
+        })
+    }
+
+    /// Emit a typed load effect. The loaded state changes only when its response is accepted.
+    ///
+    /// # Errors
+    /// Refuses overlapping work or a second load after state has been established.
+    pub fn begin_load(&mut self) -> Result<IoEffect, EffectJournalError> {
+        if self.loaded.is_some() {
+            return Err(EffectJournalError::AlreadyLoaded);
+        }
+        let effect = self.coordinator.begin_storage(StorageEffect::Load {
+            key: self.key.clone(),
+        })?;
+        self.pending = Some(PendingJournalOperation::Load);
+        Ok(effect)
+    }
+
+    /// Prepare an event and emit a full-value compare-and-swap effect.
+    ///
+    /// PREPARED is not DURABLY ACCEPTED: events, bytes, and revision remain unchanged until
+    /// [`Self::accept_response`] receives a matching successful commit response.
+    ///
+    /// # Errors
+    /// Refuses an unloaded store, overlapping work, or an invalid/full append.
+    pub fn begin_append(&mut self, event: JournalEvent) -> Result<IoEffect, EffectJournalError> {
+        let loaded = self.loaded.as_ref().ok_or(EffectJournalError::NotLoaded)?;
+        let prepared = loaded.journal.prepare_append(event)?;
+        let mut bytes = loaded.bytes.clone();
+        bytes.extend(prepared.record_bytes());
+        let expected_revision = loaded.revision;
+        let effect = self
+            .coordinator
+            .begin_storage(StorageEffect::CompareAndSwap {
+                key: self.key.clone(),
+                expected_revision,
+                bytes: bytes.clone(),
+            })?;
+        self.pending = Some(PendingJournalOperation::Append {
+            prepared,
+            bytes,
+            expected_revision,
+        });
+        Ok(effect)
+    }
+
+    /// Validate one asynchronous host response and apply only a proven transition.
+    ///
+    /// Stale, duplicated and wrong-kind responses do not consume pending work. Host failures
+    /// consume the matching operation but leave journal bytes and revision unchanged.
+    ///
+    /// # Errors
+    /// Returns a typed boundary, storage, journal, or revision-honesty refusal.
+    pub fn accept_response(
+        &mut self,
+        response: IoResponse,
+    ) -> Result<EffectJournalOutcome, EffectJournalError> {
+        let accepted = self.coordinator.accept(response)?;
+        let pending = self
+            .pending
+            .take()
+            .ok_or(EffectJournalError::OperationStateMismatch)?;
+        match (pending, accepted) {
+            (
+                PendingJournalOperation::Load,
+                IoResponse::Storage {
+                    result: StorageResult::Load(result),
+                    ..
+                },
+            ) => self.accept_load_result(result),
+            (
+                PendingJournalOperation::Append {
+                    prepared,
+                    bytes,
+                    expected_revision,
+                },
+                IoResponse::Storage {
+                    result: StorageResult::Commit(result),
+                    ..
+                },
+            ) => {
+                let revision = result.map_err(EffectJournalError::Storage)?;
+                ensure_revision_advanced(expected_revision, revision)?;
+                let loaded = self
+                    .loaded
+                    .as_mut()
+                    .ok_or(EffectJournalError::OperationStateMismatch)?;
+                loaded.journal.accept_prepared(prepared)?;
+                loaded.bytes = bytes;
+                loaded.revision = Some(revision);
+                Ok(EffectJournalOutcome::AppendCommitted)
+            }
+            (
+                PendingJournalOperation::Repair {
+                    journal,
+                    bytes,
+                    expected_revision,
+                },
+                IoResponse::Storage {
+                    result: StorageResult::Commit(result),
+                    ..
+                },
+            ) => {
+                let revision = result.map_err(EffectJournalError::Storage)?;
+                ensure_revision_advanced(Some(expected_revision), revision)?;
+                self.loaded = Some(LoadedEffectJournal {
+                    journal,
+                    bytes,
+                    revision: Some(revision),
+                });
+                Ok(EffectJournalOutcome::RepairCommitted)
+            }
+            _ => Err(EffectJournalError::OperationStateMismatch),
+        }
+    }
+
+    fn accept_load_result(
+        &mut self,
+        result: Result<Option<StoredValue>, StorageFailure>,
+    ) -> Result<EffectJournalOutcome, EffectJournalError> {
+        let value = result.map_err(EffectJournalError::Storage)?;
+        let Some(value) = value else {
+            self.loaded = Some(LoadedEffectJournal {
+                journal: Journal::with_limit(self.max_bytes)?,
+                bytes: empty_journal_bytes().to_vec(),
+                revision: None,
+            });
+            return Ok(EffectJournalOutcome::Loaded);
+        };
+
+        let decoded = Journal::decode(&value.bytes, self.max_bytes)?;
+        if let Some(repair_to) = decoded.repair_to() {
+            let bytes = value.bytes[..repair_to].to_vec();
+            let journal = decoded.into_journal();
+            let effect = self
+                .coordinator
+                .begin_storage(StorageEffect::CompareAndSwap {
+                    key: self.key.clone(),
+                    expected_revision: Some(value.revision),
+                    bytes: bytes.clone(),
+                })?;
+            self.pending = Some(PendingJournalOperation::Repair {
+                journal,
+                bytes,
+                expected_revision: value.revision,
+            });
+            return Ok(EffectJournalOutcome::RepairRequired(effect));
+        }
+
+        self.loaded = Some(LoadedEffectJournal {
+            journal: decoded.into_journal(),
+            bytes: value.bytes,
+            revision: Some(value.revision),
+        });
+        Ok(EffectJournalOutcome::Loaded)
+    }
+
+    /// The proven journal, unavailable before a clean load or successful repair CAS.
+    #[must_use]
+    pub fn journal(&self) -> Option<&Journal> {
+        self.loaded.as_ref().map(|loaded| &loaded.journal)
+    }
+
+    /// The exact revision supplied by the last successful host load/commit.
+    #[must_use]
+    pub fn revision(&self) -> Option<StorageRevision> {
+        self.loaded.as_ref().and_then(|loaded| loaded.revision)
+    }
+
+    /// Whether the coordinator still expects a storage response.
+    #[must_use]
+    pub const fn has_pending(&self) -> bool {
+        self.coordinator.has_pending_storage()
+    }
+}
+
+fn ensure_revision_advanced(
+    current: Option<StorageRevision>,
+    received: StorageRevision,
+) -> Result<(), EffectJournalError> {
+    if let Some(current) = current
+        && received.get() <= current.get()
+    {
+        return Err(EffectJournalError::NonAdvancingRevision { current, received });
+    }
+    Ok(())
+}
+
 /// What to do when a process restart is detected mid-case, per the transient-write contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconcileDecision {
@@ -774,6 +1131,322 @@ mod tests {
                 bytes: Rc::clone(&bytes),
             });
         (journal, bytes)
+    }
+
+    fn effect_key() -> StorageKey {
+        StorageKey::new("case-effect-0001").unwrap()
+    }
+
+    fn journal_bytes(events: &[JournalEvent]) -> Vec<u8> {
+        let (mut journal, bytes) = memory_journal(4096);
+        for event in events {
+            journal.try_append(event.clone()).unwrap();
+        }
+        drop(journal);
+        Rc::try_unwrap(bytes).unwrap().into_inner()
+    }
+
+    fn load_response(
+        effect: &IoEffect,
+        result: Result<Option<StoredValue>, StorageFailure>,
+    ) -> IoResponse {
+        IoResponse::Storage {
+            request_id: effect.request_id(),
+            result: StorageResult::Load(result),
+        }
+    }
+
+    fn commit_response(
+        effect: &IoEffect,
+        result: Result<StorageRevision, StorageFailure>,
+    ) -> IoResponse {
+        IoResponse::Storage {
+            request_id: effect.request_id(),
+            result: StorageResult::Commit(result),
+        }
+    }
+
+    fn loaded_effect_store(revision: u64) -> EffectJournalStore {
+        let mut store = EffectJournalStore::new(effect_key(), 4096).unwrap();
+        let load = store.begin_load().unwrap();
+        assert_eq!(
+            store
+                .accept_response(load_response(
+                    &load,
+                    Ok(Some(StoredValue {
+                        revision: StorageRevision::new(revision),
+                        bytes: journal_bytes(&[JournalEvent::IdentityRead]),
+                    })),
+                ))
+                .unwrap(),
+            EffectJournalOutcome::Loaded
+        );
+        store
+    }
+
+    fn begin_torn_repair(store: &mut EffectJournalStore) -> IoEffect {
+        let mut bytes = journal_bytes(&[JournalEvent::IdentityRead]);
+        bytes.extend([4, 0, 0, 0, 9]);
+        let load = store.begin_load().unwrap();
+        let outcome = store
+            .accept_response(load_response(
+                &load,
+                Ok(Some(StoredValue {
+                    revision: StorageRevision::new(4),
+                    bytes,
+                })),
+            ))
+            .unwrap();
+        let EffectJournalOutcome::RepairRequired(effect) = outcome else {
+            panic!("torn final tail must require a CAS repair");
+        };
+        assert!(store.journal().is_none());
+        assert_eq!(store.revision(), None);
+        effect
+    }
+
+    #[test]
+    fn effect_journal_load_accepts_host_bytes_and_revision_together() {
+        let store = loaded_effect_store(3);
+        assert_eq!(
+            store.journal().unwrap().events(),
+            &[JournalEvent::IdentityRead]
+        );
+        assert_eq!(store.revision(), Some(StorageRevision::new(3)));
+        assert!(!store.has_pending());
+    }
+
+    #[test]
+    fn effect_journal_append_advances_only_after_cas_success() {
+        let mut store = EffectJournalStore::new(effect_key(), 4096).unwrap();
+        let load = store.begin_load().unwrap();
+        assert_eq!(
+            store
+                .accept_response(load_response(&load, Ok(None)))
+                .unwrap(),
+            EffectJournalOutcome::Loaded
+        );
+        let append = store.begin_append(JournalEvent::SnapshotRead).unwrap();
+        match &append {
+            IoEffect::Storage {
+                effect:
+                    StorageEffect::CompareAndSwap {
+                        expected_revision,
+                        bytes,
+                        ..
+                    },
+                ..
+            } => {
+                assert_eq!(*expected_revision, None);
+                assert!(bytes.len() > JOURNAL_HEADER_LEN);
+            }
+            _ => panic!("append must emit storage CAS"),
+        }
+        assert!(store.journal().unwrap().events().is_empty());
+        assert_eq!(store.revision(), None);
+
+        assert_eq!(
+            store
+                .accept_response(commit_response(&append, Ok(StorageRevision::new(1)),))
+                .unwrap(),
+            EffectJournalOutcome::AppendCommitted
+        );
+        assert_eq!(
+            store.journal().unwrap().events(),
+            &[JournalEvent::SnapshotRead]
+        );
+        assert_eq!(store.revision(), Some(StorageRevision::new(1)));
+    }
+
+    #[test]
+    fn every_host_append_failure_preserves_journal_and_revision() {
+        for failure in [
+            StorageFailure::Conflict,
+            StorageFailure::QuotaExceeded,
+            StorageFailure::Unavailable,
+            StorageFailure::Cancelled,
+            StorageFailure::Corrupt,
+            StorageFailure::Unknown,
+        ] {
+            let mut store = loaded_effect_store(4);
+            let before_events = store.journal().unwrap().events().to_vec();
+            let before_revision = store.revision();
+            let append = store.begin_append(JournalEvent::SnapshotRead).unwrap();
+            assert_eq!(
+                store.accept_response(commit_response(&append, Err(failure))),
+                Err(EffectJournalError::Storage(failure))
+            );
+            assert_eq!(store.journal().unwrap().events(), before_events);
+            assert_eq!(store.revision(), before_revision);
+            assert!(!store.has_pending());
+        }
+    }
+
+    #[test]
+    fn stale_append_response_is_rejected_without_consuming_pending_or_state() {
+        let mut store = loaded_effect_store(4);
+        let append = store.begin_append(JournalEvent::SnapshotRead).unwrap();
+        let expected = append.request_id();
+        let stale = ade_runtime_ports::RequestId::new(expected.get() + 1);
+        assert_eq!(
+            store.accept_response(IoResponse::Storage {
+                request_id: stale,
+                result: StorageResult::Commit(Ok(StorageRevision::new(5))),
+            }),
+            Err(EffectJournalError::Boundary(
+                BoundaryError::RequestIdMismatch {
+                    expected,
+                    received: stale,
+                }
+            ))
+        );
+        assert_eq!(
+            store.journal().unwrap().events(),
+            &[JournalEvent::IdentityRead]
+        );
+        assert_eq!(store.revision(), Some(StorageRevision::new(4)));
+        assert!(store.has_pending());
+        assert_eq!(
+            store.accept_response(commit_response(&append, Err(StorageFailure::Conflict),)),
+            Err(EffectJournalError::Storage(StorageFailure::Conflict))
+        );
+    }
+
+    #[test]
+    fn duplicate_append_response_cannot_advance_twice() {
+        let mut store = loaded_effect_store(4);
+        let append = store.begin_append(JournalEvent::SnapshotRead).unwrap();
+        let response = commit_response(&append, Ok(StorageRevision::new(5)));
+        assert_eq!(
+            store.accept_response(response.clone()).unwrap(),
+            EffectJournalOutcome::AppendCommitted
+        );
+        let events = store.journal().unwrap().events().to_vec();
+        let revision = store.revision();
+        assert_eq!(
+            store.accept_response(response),
+            Err(EffectJournalError::Boundary(
+                BoundaryError::NoStorageRequestPending
+            ))
+        );
+        assert_eq!(store.journal().unwrap().events(), events);
+        assert_eq!(store.revision(), revision);
+    }
+
+    #[test]
+    fn wrong_kind_append_response_is_rejected_without_consuming_pending() {
+        let mut store = loaded_effect_store(4);
+        let append = store.begin_append(JournalEvent::SnapshotRead).unwrap();
+        assert_eq!(
+            store.accept_response(IoResponse::Storage {
+                request_id: append.request_id(),
+                result: StorageResult::Load(Ok(None)),
+            }),
+            Err(EffectJournalError::Boundary(
+                BoundaryError::ResponseKindMismatch
+            ))
+        );
+        assert_eq!(
+            store.journal().unwrap().events(),
+            &[JournalEvent::IdentityRead]
+        );
+        assert_eq!(store.revision(), Some(StorageRevision::new(4)));
+        assert!(store.has_pending());
+        assert_eq!(
+            store.accept_response(commit_response(&append, Err(StorageFailure::Cancelled),)),
+            Err(EffectJournalError::Storage(StorageFailure::Cancelled))
+        );
+    }
+
+    #[test]
+    fn non_advancing_host_revision_is_not_accepted_as_storage_success() {
+        let mut store = loaded_effect_store(4);
+        let append = store.begin_append(JournalEvent::SnapshotRead).unwrap();
+        assert_eq!(
+            store.accept_response(commit_response(&append, Ok(StorageRevision::new(4)),)),
+            Err(EffectJournalError::NonAdvancingRevision {
+                current: StorageRevision::new(4),
+                received: StorageRevision::new(4),
+            })
+        );
+        assert_eq!(
+            store.journal().unwrap().events(),
+            &[JournalEvent::IdentityRead]
+        );
+        assert_eq!(store.revision(), Some(StorageRevision::new(4)));
+    }
+
+    #[test]
+    fn torn_final_tail_becomes_visible_only_after_repair_cas_success() {
+        let mut store = EffectJournalStore::new(effect_key(), 4096).unwrap();
+        let repair = begin_torn_repair(&mut store);
+        match &repair {
+            IoEffect::Storage {
+                effect:
+                    StorageEffect::CompareAndSwap {
+                        expected_revision,
+                        bytes,
+                        ..
+                    },
+                ..
+            } => {
+                assert_eq!(*expected_revision, Some(StorageRevision::new(4)));
+                assert_eq!(
+                    Journal::decode(bytes, 4096)
+                        .unwrap()
+                        .into_journal()
+                        .events(),
+                    &[JournalEvent::IdentityRead]
+                );
+            }
+            _ => panic!("repair must emit storage CAS"),
+        }
+        assert_eq!(
+            store
+                .accept_response(commit_response(&repair, Ok(StorageRevision::new(5)),))
+                .unwrap(),
+            EffectJournalOutcome::RepairCommitted
+        );
+        assert_eq!(
+            store.journal().unwrap().events(),
+            &[JournalEvent::IdentityRead]
+        );
+        assert_eq!(store.revision(), Some(StorageRevision::new(5)));
+    }
+
+    #[test]
+    fn repair_conflict_and_cancel_leave_journal_and_revision_unestablished() {
+        for failure in [StorageFailure::Conflict, StorageFailure::Cancelled] {
+            let mut store = EffectJournalStore::new(effect_key(), 4096).unwrap();
+            let repair = begin_torn_repair(&mut store);
+            assert_eq!(
+                store.accept_response(commit_response(&repair, Err(failure))),
+                Err(EffectJournalError::Storage(failure))
+            );
+            assert!(store.journal().is_none());
+            assert_eq!(store.revision(), None);
+            assert!(!store.has_pending());
+            assert!(
+                store.begin_load().is_ok(),
+                "failed repair must require reload"
+            );
+        }
+    }
+
+    #[test]
+    fn effect_journal_debug_redacts_storage_keys_and_raw_bytes() {
+        let mut store = loaded_effect_store(4);
+        let append = store.begin_append(JournalEvent::SnapshotRead).unwrap();
+        let debug = format!("{store:?}");
+        assert!(!debug.contains(effect_key().as_str()));
+        assert!(!debug.contains("bytes: ["));
+        assert!(!debug.contains("record_bytes"));
+        assert!(debug.contains("byte_len"));
+
+        assert_eq!(
+            store.accept_response(commit_response(&append, Err(StorageFailure::Cancelled),)),
+            Err(EffectJournalError::Storage(StorageFailure::Cancelled))
+        );
     }
 
     #[test]
