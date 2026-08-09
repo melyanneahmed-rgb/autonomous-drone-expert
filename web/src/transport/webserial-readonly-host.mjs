@@ -1,3 +1,8 @@
+import {
+  WasmReadonlySerialDirective,
+  WasmReadonlySerialDiscovery,
+} from "/wasm/ade_web_readonly_serial_wasm_bridge.js";
+
 const INITIAL_MSP_BAUD_RATE = 115200;
 const DEFAULT_EXCHANGE_TIMEOUT_MS = 1500;
 const MAX_CHUNKS_PER_EXCHANGE = 128;
@@ -47,19 +52,13 @@ export class WebSerialReadonlyHost {
   #readerCancelled = false;
   #writer = null;
   #timeoutMs;
-  #directiveType;
 
   constructor({
     serial = globalThis.navigator?.serial,
     timeoutMs = DEFAULT_EXCHANGE_TIMEOUT_MS,
-    rustDirectiveType,
   } = {}) {
     this.#serial = serial;
     this.#timeoutMs = timeoutMs;
-    if (typeof rustDirectiveType !== "function") {
-      throw new TypeError("RUST_WEB_SERIAL_REFUSAL:DIRECTIVE_TYPE_REQUIRED");
-    }
-    this.#directiveType = rustDirectiveType;
   }
 
   /** Must be called directly from the owner-controlled user gesture handler. */
@@ -146,13 +145,14 @@ export class WebSerialReadonlyHost {
     }
   }
 
-  /** Run one Rust state machine after explicit selection; there is no generic byte API. */
-  async discover(discovery) {
+  /** Create and run the exact generated Rust state machine after explicit selection. */
+  async discover() {
     if (!this.#selectedPort) return { outcome: "failed", failure: "Unavailable" };
-    let directive = discovery.begin();
+    const discovery = new WasmReadonlySerialDiscovery();
     try {
+      let directive = discovery.begin();
       while (directive) {
-        if (!(directive instanceof this.#directiveType)) {
+        if (!(directive instanceof WasmReadonlySerialDirective)) {
           throw new TypeError("RUST_WEB_SERIAL_REFUSAL:UNTRUSTED_DIRECTIVE");
         }
         const current = directive;
@@ -186,11 +186,17 @@ export class WebSerialReadonlyHost {
         outcome: discovery.outcomeKind,
         failure: discovery.failureClass ?? undefined,
         scopeMismatchField: discovery.scopeMismatchField ?? undefined,
+        apiVersion: discovery.apiVersion ?? undefined,
+        fcVariant: discovery.fcVariant ?? undefined,
+        fcVersion: discovery.fcVersion ?? undefined,
+        targetName: discovery.targetName ?? undefined,
+        hardwareObserved: discovery.hardwareObserved,
       };
     } finally {
       if (this.#selectedPort || this.#opened || this.#reader || this.#writer) {
         await this.#cleanup();
       }
+      discovery.free();
     }
   }
 }

@@ -16,12 +16,17 @@ export interface ReadonlyDiscoveryResult {
   outcome: "in-scope" | "scope-mismatch" | "failed" | "pending";
   failure?: string;
   scopeMismatchField?: string;
+  apiVersion?: string;
+  fcVariant?: string;
+  fcVersion?: string;
+  targetName?: string;
+  hardwareObserved: false;
 }
 
 export declare class WebSerialReadonlyHost {
-  constructor(options: { serial?: object; timeoutMs?: number; rustDirectiveType: Function });
+  constructor(options?: { serial?: object; timeoutMs?: number });
   selectPortFromUserGesture(): Promise<PortSelectionResult>;
-  discover(discovery: object): Promise<ReadonlyDiscoveryResult>;
+  discover(): Promise<ReadonlyDiscoveryResult>;
 }
 
 export declare const WEB_SERIAL_READONLY_INITIAL_BAUD_RATE: 115200;

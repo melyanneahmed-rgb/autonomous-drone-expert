@@ -1,6 +1,5 @@
 import { WebSerialReadonlyHost } from "/webserial-readonly-host.mjs";
 import initWasm, {
-  WasmReadonlySerialDirective,
   WasmReadonlySerialDiscovery,
 } from "/wasm/ade_web_readonly_serial_wasm_bridge.js";
 
@@ -127,7 +126,6 @@ function hostFor(serial, timeoutMs = 30) {
   return new WebSerialReadonlyHost({
     serial,
     timeoutMs,
-    rustDirectiveType: WasmReadonlySerialDirective,
   });
 }
 
@@ -137,14 +135,8 @@ async function runDiscovery(replies, mode = "normal", timeoutMs = 30) {
   const host = hostFor(serial, timeoutMs);
   const selected = await host.selectPortFromUserGesture();
   assert(selected.ok, "explicit selection should succeed");
-  const bridge = new WasmReadonlySerialDiscovery();
-  try {
-    const result = await host.discover(bridge);
-    return { bridge, result, port, serial };
-  } catch (error) {
-    bridge.free();
-    throw error;
-  }
+  const result = await host.discover();
+  return { result, port, serial };
 }
 
 async function scenarioAUnavailable() {
@@ -168,56 +160,89 @@ async function scenarioBCancelled() {
 async function scenarioCSuccessAndGCleanup() {
   mark("C-success-G-cleanup");
   const run = await runDiscovery(IN_SCOPE_REPLIES);
-  try {
-    assert(
-      run.result.outcome === "in-scope",
-      `typed in-scope result (${JSON.stringify(run.result)}, writes=${run.port.writes.length})`,
-    );
-    assert(run.bridge.apiVersion === "1.46", "typed API version");
-    assert(run.bridge.fcVariant === "BTFL", "typed FC variant");
-    assert(run.bridge.fcVersion === "4.5.5", "typed FC version");
-    assert(run.bridge.targetName === "SPEEDYBEEF405V4", "typed target");
-    assert(run.bridge.hardwareObserved === false, "software evidence only");
-    assert(run.port.openOptions?.baudRate === 115200, "internal baud rate");
-    assert(run.port.writes.length === 4, "exactly four writes");
-    EXPECTED_REQUESTS.forEach((expected, index) =>
-      assert(equalBytes(run.port.writes[index], expected), `request order ${index}`),
-    );
-    assert(run.port.readerReleased === 1, "reader lock released");
-    assert(run.port.writerReleased === 1, "writer lock released");
-    assert(run.port.closeCount === 1, "port closed exactly once");
-  } finally {
-    run.bridge.free();
-  }
+  assert(
+    run.result.outcome === "in-scope",
+    `typed in-scope result (${JSON.stringify(run.result)}, writes=${run.port.writes.length})`,
+  );
+  assert(run.result.apiVersion === "1.46", "typed API version");
+  assert(run.result.fcVariant === "BTFL", "typed FC variant");
+  assert(run.result.fcVersion === "4.5.5", "typed FC version");
+  assert(run.result.targetName === "SPEEDYBEEF405V4", "typed target");
+  assert(run.result.hardwareObserved === false, "software evidence only");
+  assert(run.port.openOptions?.baudRate === 115200, "internal baud rate");
+  assert(run.port.writes.length === 4, "exactly four writes");
+  EXPECTED_REQUESTS.forEach((expected, index) =>
+    assert(equalBytes(run.port.writes[index], expected), `request order ${index}`),
+  );
+  assert(run.port.readerReleased === 1, "reader lock released");
+  assert(run.port.writerReleased === 1, "writer lock released");
+  assert(run.port.closeCount === 1, "port closed exactly once");
 }
 
 async function scenarioDAuthorityRefusal() {
   mark("D-authority-refusal");
-  const port = new TestPort(IN_SCOPE_REPLIES);
-  const host = hostFor(new TestSerial(port));
-  await host.selectPortFromUserGesture();
-  const before = port.writes.length;
-  for (const prohibited of PROHIBITED_TEST_REQUESTS) {
-    assert(prohibited.length > 0, "test-only prohibited fixture exists");
-    assert(typeof WasmReadonlySerialDiscovery.prototype.sendRaw === "undefined", "no raw API");
-    assert(typeof WasmReadonlySerialDiscovery.prototype.writeCommand === "undefined", "no command API");
-    assert(port.writes.length === before, "prohibited bytes cannot reach writer");
-  }
-  class ForgedDirective {}
-  const forgedDiscovery = { begin: () => ({ kind: "exchange-identification-read", bytes: PROHIBITED_TEST_REQUESTS[0], requestId: "1" }) };
-  await assertRejected(() => host.discover(forgedDiscovery), "UNTRUSTED_DIRECTIVE");
-  assert(port.writes.length === before, "forged directive refused before writer");
-  assert(ForgedDirective !== WasmReadonlySerialDirective, "only generated Rust directive type trusted");
-}
+  assert(WebSerialReadonlyHost.length === 0, "constructor has no required trust argument");
+  assert(WebSerialReadonlyHost.prototype.discover.length === 0, "discover accepts no authority");
+  assert(typeof WebSerialReadonlyHost.setRustBindings === "undefined", "no binding setter");
+  assert(typeof WebSerialReadonlyHost.prototype.sendRaw === "undefined", "no raw host API");
+  assert(typeof WebSerialReadonlyHost.prototype.writeCommand === "undefined", "no command API");
+  assert(typeof WasmReadonlySerialDiscovery.prototype.sendRaw === "undefined", "no raw Rust API");
+  assert(typeof WasmReadonlySerialDiscovery.prototype.writeCommand === "undefined", "no Rust command API");
 
-async function assertRejected(action, fragment) {
-  try {
-    await action();
-  } catch (error) {
-    assert(String(error).includes(fragment), `wrong refusal: ${error}`);
-    return;
+  for (const prohibited of PROHIBITED_TEST_REQUESTS) {
+    let fakeTypeChecks = 0;
+    class FakeDirective {
+      static [Symbol.hasInstance]() {
+        fakeTypeChecks += 1;
+        return true;
+      }
+
+      constructor() {
+        this.kind = "exchange-identification-read";
+        this.bytes = prohibited;
+        this.commandId = prohibited[4];
+        this.requestId = "1";
+      }
+    }
+    const forgeries = [
+      ["class directive", new FakeDirective()],
+      ["plain directive", {
+        kind: "exchange-identification-read",
+        bytes: prohibited,
+        commandId: prohibited[4],
+        requestId: "1",
+      }],
+    ];
+    for (const [label, forgedDirective] of forgeries) {
+      let fakeBeginCalls = 0;
+      const fakeDiscovery = {
+        begin() {
+          fakeBeginCalls += 1;
+          return forgedDirective;
+        },
+      };
+      const port = new TestPort([], "open-failure");
+      port.open = async () => {
+        port.openCount += 1;
+        throw new Error("injected open refusal");
+      };
+      const host = new WebSerialReadonlyHost({
+        serial: new TestSerial(port),
+        timeoutMs: 15,
+        rustDirectiveType: FakeDirective,
+        directiveType: FakeDirective,
+        discoveryFactory: () => fakeDiscovery,
+        bindings: { discovery: fakeDiscovery, directive: forgedDirective },
+        validator: () => true,
+      });
+      assert((await host.selectPortFromUserGesture()).ok, `${label} probe selected`);
+      const result = await host.discover(fakeDiscovery, forgedDirective, prohibited, prohibited[4]);
+      assert(result.outcome === "failed", `${label} remains fail closed`);
+      assert(fakeBeginCalls === 0, `${label} discovery was not observed`);
+      assert(fakeTypeChecks === 0, `${label} class was not observed`);
+      assert(port.writes.length === 0, `${label} bytes cannot reach writer`);
+    }
   }
-  throw new Error(`Web Serial read-only refusal: expected ${fragment}`);
 }
 
 function scenarioECorrelation() {
@@ -247,29 +272,21 @@ async function scenarioFFailClosed() {
     ["oversized", "MalformedResponse"],
   ]) {
     const run = await runDiscovery(IN_SCOPE_REPLIES, mode, 15);
-    try {
-      assert(run.result.outcome === "failed", `${mode} failed`);
-      assert(run.result.failure === expected, `${mode} stable failure`);
-      assert(run.port.closeCount === 1, `${mode} closed`);
-      assert(run.port.readerReleased === 1, `${mode} reader released`);
-      assert(run.port.writerReleased === 1, `${mode} writer released`);
-    } finally {
-      run.bridge.free();
-    }
+    assert(run.result.outcome === "failed", `${mode} failed`);
+    assert(run.result.failure === expected, `${mode} stable failure`);
+    assert(run.port.closeCount === 1, `${mode} closed`);
+    assert(run.port.readerReleased === 1, `${mode} reader released`);
+    assert(run.port.writerReleased === 1, `${mode} writer released`);
   }
 }
 
 async function scenarioHScopeMismatch() {
   mark("H-scope-mismatch");
   const run = await runDiscovery(OUT_OF_SCOPE_REPLIES);
-  try {
-    assert(run.result.outcome === "scope-mismatch", "scope mismatch result");
-    assert(run.result.scopeMismatchField === "msp_api_version", "typed mismatch field");
-    assert(run.bridge.hardwareObserved === false, "scope is not hardware evidence");
-    assert(run.port.writes.length === 4 && run.port.closeCount === 1, "read-only stop and close");
-  } finally {
-    run.bridge.free();
-  }
+  assert(run.result.outcome === "scope-mismatch", "scope mismatch result");
+  assert(run.result.scopeMismatchField === "msp_api_version", "typed mismatch field");
+  assert(run.result.hardwareObserved === false, "scope is not hardware evidence");
+  assert(run.port.writes.length === 4 && run.port.closeCount === 1, "read-only stop and close");
 }
 
 async function run() {
@@ -297,5 +314,7 @@ try {
   document.body.dataset.result = "fail";
   const name = error instanceof Error ? error.name : "UnknownError";
   const message = error instanceof Error ? error.message : String(error);
-  output.textContent = `WEB_SERIAL_READONLY_BROWSER_FAIL:${name}:${message}`;
+  const step = output.textContent;
+  const stack = error instanceof Error ? error.stack : undefined;
+  output.textContent = `WEB_SERIAL_READONLY_BROWSER_FAIL:${step}:${name}:${message}:${stack ?? ""}`;
 }
