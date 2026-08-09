@@ -1,6 +1,7 @@
-# Required cargo-deny policy for the Rust workspace. CI pins cargo-deny 0.20.2 and runs all
-# four checks. ADR-0009 still prohibits every external Rust dependency; the current graph
-# therefore contains first-party workspace path dependencies only.
+# Required cargo-deny policy for the Rust product workspace. CI pins cargo-deny 0.20.2 and
+# runs all four checks. ADR-0012 narrows ADR-0009 with exactly one audited product dependency:
+# wasm-bindgen 0.2.127 in the storage-only bridge. All other external product dependencies
+# remain prohibited by scripts/check_isolation.py.
 
 [graph]
 all-features = true
@@ -24,7 +25,8 @@ confidence-threshold = 0.93
 # never a quiet edit here.
 private = { ignore = true }
 # Deliberately conservative starting allowlist. Any addition is a reviewed decision,
-# recorded in an ADR, not a silent edit.
+# recorded in an ADR, not a silent edit. These licenses cover the audited wasm-bindgen
+# product closure as well as future candidates only after their own review.
 allow = [
     "MIT",
     "Apache-2.0",
