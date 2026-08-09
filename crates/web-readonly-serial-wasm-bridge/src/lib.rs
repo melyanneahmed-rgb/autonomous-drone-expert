@@ -591,7 +591,14 @@ mod tests {
                             CommandId::Reboot => WriteCommandClass::Reboot,
                             _ => unreachable!(),
                         },
-                        RecoveryClass::AutomaticRollbackSupported,
+                        match command {
+                            CommandId::SetBeeperConfig => {
+                                RecoveryClass::TransientWritePendingReconcileOnResume
+                            }
+                            CommandId::EepromWrite => RecoveryClass::AutomaticRollbackSupported,
+                            CommandId::Reboot => RecoveryClass::ManualRecoveryRequired,
+                            _ => unreachable!(),
+                        },
                     )
                     .unwrap();
                     TransportEffect::Exchange(OutboundPacket::approved(bytes, approval).unwrap())
