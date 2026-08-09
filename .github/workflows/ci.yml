@@ -22,6 +22,7 @@ on:
       - feature/m1-beeper-mock-replay
       - continuation/m1-acceptance-hardening
       - feat/m2-web-dependency-policy
+      - feat/webapp-approved-ui-v3
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -35,6 +36,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  web-build:
+    name: web-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Prove runner Node compatibility
+        run: |
+          node --version
+          npm --version
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!((major === 20 && minor >= 19) || major >= 22)) { console.error(`Node ${process.versions.node} does not satisfy Vite 8.2.1`); process.exit(1); }'
+
+      - name: Prove pinned ephemeral npm
+        run: test "$(npx --yes npm@11.13.0 --version)" = "11.13.0"
+
+      - name: Install audited Web package without lifecycle scripts
+        working-directory: web
+        run: npx --yes npm@11.13.0 ci --ignore-scripts --no-fund
+
+      - name: Typecheck
+        working-directory: web
+        run: npx --yes npm@11.13.0 run typecheck
+
+      - name: Source, authority, PWA and build contracts
+        working-directory: web
+        run: npx --yes npm@11.13.0 test
+
+      - name: Production build
+        working-directory: web
+        run: npx --yes npm@11.13.0 run build
+
+      - name: Security audit
+        working-directory: web
+        run: npx --yes npm@11.13.0 audit --audit-level=high
+
+      - name: Prove package and policy files did not drift
+        run: git diff --exit-code -- web/package.json web/package-lock.json policy/web-dependencies.json
+
   policy-gates:
     name: policy-gates
     runs-on: ubuntu-latest
