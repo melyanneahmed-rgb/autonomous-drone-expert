@@ -209,6 +209,15 @@ jobs:
       - name: Check workspace against declared MSRV
         run: cargo +1.85.0 check --workspace --all-targets
 
+      - name: Install isolated tooling MSRV
+        run: rustup toolchain install 1.86.0 --profile minimal
+
+      - name: Check isolated WASM tooling against declared MSRV
+        run: |
+          cargo +1.86.0 check --locked \
+            --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml \
+            --all-targets
+
   rust-wasm-core:
     # M2 does not claim that the whole native M1 harness is a browser application. This job
     # proves the protocol-independent planning, journal, host-effect and core API boundary
