@@ -16,6 +16,7 @@ rejected and why, and the consequences.
 | [ADR-0009](ADR-0009-first-party-workspace-path-dependencies.md) | First-Party Workspace Path Dependencies | Accepted |
 | [ADR-0010](ADR-0010-web-pwa-product-shell-and-responsibility-boundary.md) | Web/PWA Product Shell and Responsibility Boundary | Accepted — supersedes part of ADR-0002 |
 | [ADR-0011](ADR-0011-audited-web-dependency-and-repository-policy.md) | Audited Web Dependency and Repository Policy | Accepted — supersedes ADR-0002 package manager/layout |
+| [ADR-0012](ADR-0012-audited-storage-wasm-binding-exception.md) | Audited Storage-Only WASM Binding Exception | Accepted — narrowly permits exact product/tooling dependencies |
 
 Rules: an ADR is never edited to change its decision. It is superseded by a new ADR that
 references it.

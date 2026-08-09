@@ -96,9 +96,14 @@ class DependencyPolicyTests(unittest.TestCase):
             f'[package]\nname = "{name}"\nversion = "0.0.0"\n', encoding="utf-8"
         )
 
-    def classify(self, dep_name: str, spec):
+    def classify(self, dep_name: str, spec, table_name: str = "dependencies"):
         return check_isolation.classify_dependency(
-            dep_name, spec, self.beta_manifest, self.root, self.member_dirs
+            dep_name,
+            spec,
+            self.beta_manifest,
+            self.root,
+            self.member_dirs,
+            table_name,
         )
 
     # ---- PASS ----
@@ -141,6 +146,79 @@ class DependencyPolicyTests(unittest.TestCase):
     def test_registry_version_dependency_is_rejected(self) -> None:
         self.assertIsNotNone(self.classify("serde", "1.0"))
         self.assertIsNotNone(self.classify("serde", {"version": "1.0"}))
+
+    def test_exact_wasm_bindgen_runtime_exception_is_location_and_shape_bound(self) -> None:
+        manifest = self.root / "crates" / "web-storage-wasm-bridge" / "Cargo.toml"
+        spec = {
+            "version": "=0.2.127",
+            "default-features": False,
+            "features": ["std"],
+        }
+        self.assertIsNone(
+            check_isolation.classify_dependency(
+                "wasm-bindgen", spec, manifest, self.root, self.member_dirs
+            )
+        )
+        drift = {**spec, "version": "=0.2.126"}
+        self.assertIsNotNone(
+            check_isolation.classify_dependency(
+                "wasm-bindgen", drift, manifest, self.root, self.member_dirs
+            )
+        )
+        self.assertIsNotNone(
+            check_isolation.classify_dependency(
+                "wasm-bindgen",
+                spec,
+                self.beta_manifest,
+                self.root,
+                self.member_dirs,
+            )
+        )
+        self.assertIsNotNone(
+            check_isolation.classify_dependency(
+                "wasm-bindgen",
+                spec,
+                manifest,
+                self.root,
+                self.member_dirs,
+                "dev-dependencies",
+            )
+        )
+
+    def test_exact_cli_support_exception_is_tooling_only(self) -> None:
+        manifest = self.root / "tools" / "wasm-bindgen-cli-support" / "Cargo.toml"
+        spec = {"version": "=0.2.127"}
+        self.assertIsNone(
+            check_isolation.classify_dependency(
+                "wasm-bindgen-cli-support",
+                spec,
+                manifest,
+                self.root,
+                self.member_dirs,
+            )
+        )
+        self.assertIsNotNone(
+            check_isolation.classify_dependency(
+                "wasm-bindgen-cli-support",
+                spec,
+                self.beta_manifest,
+                self.root,
+                self.member_dirs,
+            )
+        )
+
+    def test_full_wasm_bindgen_cli_is_always_rejected(self) -> None:
+        self.assertIsNotNone(
+            self.classify("wasm-bindgen-cli", {"version": "=0.2.127"})
+        )
+
+    def test_alias_cannot_hide_an_audited_registry_package(self) -> None:
+        self.assertIsNotNone(
+            self.classify(
+                "binding-tool",
+                {"package": "wasm-bindgen", "version": "=0.2.127"},
+            )
+        )
 
     def test_path_plus_version_hybrid_is_rejected(self) -> None:
         msg = self.classify("ade-alpha", {"path": "../alpha", "version": "1.0"})

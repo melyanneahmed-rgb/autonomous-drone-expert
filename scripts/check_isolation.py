@@ -20,19 +20,33 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Dependency policy (ADR-0009). The foundation batch's absolute "zero dependencies" rule is
-# replaced by a precise one: the ONLY dependencies permitted are first-party PATH
-# dependencies onto crates that are ACTUAL members of THIS workspace. Everything else -- a
-# registry version, a git URL, a wildcard, a path escaping the repository, a path that is not
-# a real workspace member, a workspace-inherited dependency, or an alias hiding a different
-# package -- is rejected. EXTERNAL PRODUCTION DEPENDENCIES REMAIN PROHIBITED; their
-# supply-chain audit is enforced separately by cargo-deny. Relaxing this to admit an external
-# source is a new Dependency Audit and its own reviewed pull request, never a quiet edit.
+# Dependency policy (ADR-0009, narrowed by ADR-0012). First-party path dependencies onto
+# actual members of this workspace remain the default and all historical checks remain in
+# force. ADR-0012 admits exactly two audited crates, in exactly one manifest and dependency
+# class each. The declaration shape is part of the allowlist: aliases, feature drift, version
+# drift, table drift, or moving either dependency to another manifest fails closed.
 #
 # "Actual member" is decided by Cargo itself via `cargo metadata` (below), so that
 # `workspace.exclude` is honoured -- a `workspace.members` glob match is NOT membership.
 
 ALLOWED_REMOTES = {"origin"}
+
+AUDITED_REGISTRY_DEPENDENCIES = {
+    (
+        PurePosixPath("crates/web-storage-wasm-bridge/Cargo.toml"),
+        "dependencies",
+        "wasm-bindgen",
+    ): {
+        "version": "=0.2.127",
+        "default-features": False,
+        "features": ["std"],
+    },
+    (
+        PurePosixPath("tools/wasm-bindgen-cli-support/Cargo.toml"),
+        "dependencies",
+        "wasm-bindgen-cli-support",
+    ): {"version": "=0.2.127"},
+}
 
 LICENSE_FILENAMES = {
     "license",
@@ -217,29 +231,46 @@ def classify_dependency(
     manifest_path: Path,
     root: Path = ROOT,
     member_dirs: set[Path] | None = None,
+    table_name: str = "dependencies",
 ) -> str | None:
     """Return an error message if `spec` violates the policy, else None.
 
-    The only accepted form is a path dependency onto a crate that is an ACTUAL member of
+    The normal accepted form is a path dependency onto a crate that is an ACTUAL member of
     this workspace (per `cargo metadata`, so `workspace.exclude` is honoured), whose real
     package name matches the declaration (allowing an explicit ``package = "…"`` rename).
-    Registry versions, git sources, wildcards, hybrids, workspace-inherited deps, escaping
-    paths and non-member paths are all rejected. Path containment is checked structurally
-    (resolve + relative_to), never by string prefix.
+    ADR-0012 additionally permits the exact declarations in
+    ``AUDITED_REGISTRY_DEPENDENCIES``. Registry versions, git sources, wildcards, hybrids,
+    workspace-inherited deps, escaping paths and non-member paths are otherwise rejected.
+    Path containment is checked structurally (resolve + relative_to), never by string prefix.
 
     `member_dirs` is the set of resolved member directories from
     [`resolve_workspace_member_dirs`]; None means membership could not be determined, and any
     path dependency is then refused **fail-closed**.
     """
-    prefix = f"{manifest_path.relative_to(root)}: dependency '{dep_name}'"
+    relative_manifest = PurePosixPath(manifest_path.relative_to(root).as_posix())
+    prefix = f"{relative_manifest}: dependency '{dep_name}'"
+
+    expected_registry_spec = AUDITED_REGISTRY_DEPENDENCIES.get(
+        (relative_manifest, table_name, dep_name)
+    )
+
+    def classify_registry_spec() -> str | None:
+        if expected_registry_spec is None:
+            return (
+                f"{prefix} is an unaudited registry dependency. Only the exact "
+                "manifest/table/name/spec shapes in ADR-0012 are permitted."
+            )
+        if spec != expected_registry_spec:
+            return (
+                f"{prefix} drifts from its audited ADR-0012 declaration "
+                f"(expected {expected_registry_spec!r}, found {spec!r})."
+            )
+        return None
 
     if isinstance(spec, str):
         if spec.strip() == "*":
             return f"{prefix} uses a wildcard version. Prohibited (ADR-0009)."
-        return (
-            f"{prefix} is a registry/version dependency ('{spec}'). Only first-party "
-            "workspace path dependencies are allowed (ADR-0009)."
-        )
+        return classify_registry_spec()
     if not isinstance(spec, dict):
         return f"{prefix} has an unrecognised specification. Prohibited (ADR-0009)."
 
@@ -255,10 +286,7 @@ def classify_dependency(
                 f"{prefix} is workspace-inherited with no local path; it cannot be "
                 "resolved to a pinned local member. Prohibited (ADR-0009)."
             )
-        return (
-            f"{prefix} is a registry/version dependency (no path). Only first-party "
-            "workspace path dependencies are allowed (ADR-0009)."
-        )
+        return classify_registry_spec()
     if dep_path.strip() == "*":
         return f"{prefix} uses a wildcard path. Prohibited (ADR-0009)."
     version = spec.get("version")
@@ -321,9 +349,11 @@ def check_cargo_manifests(files: list[Path]) -> None:
     member_dirs = resolve_workspace_member_dirs(ROOT) if any_path_dependency else set()
 
     for path, manifest in manifests:
-        for _table_name, table in _iter_dependency_tables(manifest):
+        for table_name, table in _iter_dependency_tables(manifest):
             for name, spec in (table or {}).items():
-                message = classify_dependency(name, spec, path, ROOT, member_dirs)
+                message = classify_dependency(
+                    name, spec, path, ROOT, member_dirs, table_name
+                )
                 if message:
                     fail(message)
 
