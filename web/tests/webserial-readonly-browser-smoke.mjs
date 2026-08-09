@@ -110,7 +110,8 @@ async function inspectPage(devToolsUrl, pageUrl) {
       }
       await delay(100);
     }
-    throw new Error("WEB_SERIAL_BROWSER_TEST_TIMEOUT");
+    const output = await evaluate("document.querySelector('#result')?.textContent ?? ''");
+    throw new Error(`WEB_SERIAL_BROWSER_TEST_TIMEOUT:${output}`);
   } finally {
     socket.close();
   }
@@ -162,6 +163,9 @@ try {
   } else {
     console.log("real-browser Rust WASM + Web Serial read-only gate passed (A-H)");
   }
+} catch (error) {
+  console.error(`WEB_SERIAL_BROWSER_REQUESTS:${servedRequests.join(",")}`);
+  throw error;
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(profile, { recursive: true, force: true });

@@ -10,8 +10,8 @@ const IN_SCOPE_REPLIES = [
   [36, 77, 62, 3, 1, 0, 1, 46, 45],
   [36, 77, 62, 4, 2, 66, 84, 70, 76, 26],
   [36, 77, 62, 3, 3, 4, 5, 5, 4],
-  [36, 77, 62, 88, 4, 83, 52, 48, 53, 0, 0, 0, 0, 15, 83, 80, 69, 69, 68, 89, 66, 69, 69, 70, 52, 48, 53, 86, 52, 17, 83, 112, 101, 101, 100, 121, 66, 101, 101, 32, 70, 52, 48, 53, 32, 86, 52, 3, 83, 80, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66],
-].map(Uint8Array.from);
+  [36, 77, 62, 88, 4, 83, 52, 48, 53, 0, 0, 0, 0, 15, 83, 80, 69, 69, 68, 89, 66, 69, 69, 70, 52, 48, 53, 86, 52, 17, 83, 112, 101, 101, 100, 121, 66, 101, 101, 32, 70, 52, 48, 53, 32, 86, 52, 3, 83, 80, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66],
+].map((bytes) => Uint8Array.from(bytes));
 const OUT_OF_SCOPE_REPLIES = [
   Uint8Array.from([36, 77, 62, 3, 1, 0, 1, 45, 46]),
   ...IN_SCOPE_REPLIES.slice(1),
@@ -169,7 +169,10 @@ async function scenarioCSuccessAndGCleanup() {
   mark("C-success-G-cleanup");
   const run = await runDiscovery(IN_SCOPE_REPLIES);
   try {
-    assert(run.result.outcome === "in-scope", "typed in-scope result");
+    assert(
+      run.result.outcome === "in-scope",
+      `typed in-scope result (${JSON.stringify(run.result)}, writes=${run.port.writes.length})`,
+    );
     assert(run.bridge.apiVersion === "1.46", "typed API version");
     assert(run.bridge.fcVariant === "BTFL", "typed FC variant");
     assert(run.bridge.fcVersion === "4.5.5", "typed FC version");

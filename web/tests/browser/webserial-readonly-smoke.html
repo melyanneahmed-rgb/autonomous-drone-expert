@@ -7,6 +7,18 @@
   </head>
   <body data-result="loading">
     <output id="result">WEB_SERIAL_READONLY_RUNNING:bootstrap</output>
+    <script>
+      globalThis.addEventListener("error", (event) => {
+        document.body.dataset.result = "fail";
+        document.querySelector("#result").textContent =
+          `WEB_SERIAL_READONLY_BROWSER_FAIL:ModuleError:${event.message}`;
+      });
+      globalThis.addEventListener("unhandledrejection", (event) => {
+        document.body.dataset.result = "fail";
+        document.querySelector("#result").textContent =
+          `WEB_SERIAL_READONLY_BROWSER_FAIL:UnhandledRejection:${String(event.reason)}`;
+      });
+    </script>
     <script src="/webserial-readonly-smoke.mjs" type="module"></script>
   </body>
 </html>
