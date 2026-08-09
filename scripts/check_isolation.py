@@ -20,19 +20,44 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Dependency policy (ADR-0009). The foundation batch's absolute "zero dependencies" rule is
-# replaced by a precise one: the ONLY dependencies permitted are first-party PATH
-# dependencies onto crates that are ACTUAL members of THIS workspace. Everything else -- a
-# registry version, a git URL, a wildcard, a path escaping the repository, a path that is not
-# a real workspace member, a workspace-inherited dependency, or an alias hiding a different
-# package -- is rejected. EXTERNAL PRODUCTION DEPENDENCIES REMAIN PROHIBITED; their
-# supply-chain audit is enforced separately by cargo-deny. Relaxing this to admit an external
-# source is a new Dependency Audit and its own reviewed pull request, never a quiet edit.
+# Dependency policy (ADR-0009, narrowed by ADR-0012). First-party path dependencies onto
+# actual members of this workspace remain the default and all historical checks remain in
+# force. ADR-0012 admits exactly two audited crates, in exactly one manifest and dependency
+# class each. The declaration shape is part of the allowlist: aliases, feature drift, version
+# drift, table drift, or moving either dependency to another manifest fails closed.
 #
 # "Actual member" is decided by Cargo itself via `cargo metadata` (below), so that
 # `workspace.exclude` is honoured -- a `workspace.members` glob match is NOT membership.
 
 ALLOWED_REMOTES = {"origin"}
+
+AUDITED_REGISTRY_DEPENDENCIES = {
+    (
+        PurePosixPath("crates/web-storage-wasm-bridge/Cargo.toml"),
+        "dependencies",
+        "wasm-bindgen",
+    ): {
+        "version": "=0.2.127",
+        "default-features": False,
+        "features": ["std"],
+    },
+    (
+        PurePosixPath("tools/wasm-bindgen-cli-support/Cargo.toml"),
+        "dependencies",
+        "wasm-bindgen-cli-support",
+    ): {"version": "=0.2.127"},
+}
+
+WASM_TOOLING_ROOT = PurePosixPath("tools/wasm-bindgen-cli-support")
+WASM_TOOLING_FILES = {
+    WASM_TOOLING_ROOT / "Cargo.toml",
+    WASM_TOOLING_ROOT / "Cargo.lock",
+    WASM_TOOLING_ROOT / "deny.toml",
+}
+EXPECTED_ZLIB_EXCEPTION = {
+    "allow": ["Zlib"],
+    "crate": "foldhash@=0.2.0",
+}
 
 LICENSE_FILENAMES = {
     "license",
@@ -217,29 +242,46 @@ def classify_dependency(
     manifest_path: Path,
     root: Path = ROOT,
     member_dirs: set[Path] | None = None,
+    table_name: str = "dependencies",
 ) -> str | None:
     """Return an error message if `spec` violates the policy, else None.
 
-    The only accepted form is a path dependency onto a crate that is an ACTUAL member of
+    The normal accepted form is a path dependency onto a crate that is an ACTUAL member of
     this workspace (per `cargo metadata`, so `workspace.exclude` is honoured), whose real
     package name matches the declaration (allowing an explicit ``package = "…"`` rename).
-    Registry versions, git sources, wildcards, hybrids, workspace-inherited deps, escaping
-    paths and non-member paths are all rejected. Path containment is checked structurally
-    (resolve + relative_to), never by string prefix.
+    ADR-0012 additionally permits the exact declarations in
+    ``AUDITED_REGISTRY_DEPENDENCIES``. Registry versions, git sources, wildcards, hybrids,
+    workspace-inherited deps, escaping paths and non-member paths are otherwise rejected.
+    Path containment is checked structurally (resolve + relative_to), never by string prefix.
 
     `member_dirs` is the set of resolved member directories from
     [`resolve_workspace_member_dirs`]; None means membership could not be determined, and any
     path dependency is then refused **fail-closed**.
     """
-    prefix = f"{manifest_path.relative_to(root)}: dependency '{dep_name}'"
+    relative_manifest = PurePosixPath(manifest_path.relative_to(root).as_posix())
+    prefix = f"{relative_manifest}: dependency '{dep_name}'"
+
+    expected_registry_spec = AUDITED_REGISTRY_DEPENDENCIES.get(
+        (relative_manifest, table_name, dep_name)
+    )
+
+    def classify_registry_spec() -> str | None:
+        if expected_registry_spec is None:
+            return (
+                f"{prefix} is an unaudited registry dependency. Only the exact "
+                "manifest/table/name/spec shapes in ADR-0012 are permitted."
+            )
+        if spec != expected_registry_spec:
+            return (
+                f"{prefix} drifts from its audited ADR-0012 declaration "
+                f"(expected {expected_registry_spec!r}, found {spec!r})."
+            )
+        return None
 
     if isinstance(spec, str):
         if spec.strip() == "*":
             return f"{prefix} uses a wildcard version. Prohibited (ADR-0009)."
-        return (
-            f"{prefix} is a registry/version dependency ('{spec}'). Only first-party "
-            "workspace path dependencies are allowed (ADR-0009)."
-        )
+        return classify_registry_spec()
     if not isinstance(spec, dict):
         return f"{prefix} has an unrecognised specification. Prohibited (ADR-0009)."
 
@@ -255,10 +297,7 @@ def classify_dependency(
                 f"{prefix} is workspace-inherited with no local path; it cannot be "
                 "resolved to a pinned local member. Prohibited (ADR-0009)."
             )
-        return (
-            f"{prefix} is a registry/version dependency (no path). Only first-party "
-            "workspace path dependencies are allowed (ADR-0009)."
-        )
+        return classify_registry_spec()
     if dep_path.strip() == "*":
         return f"{prefix} uses a wildcard path. Prohibited (ADR-0009)."
     version = spec.get("version")
@@ -321,11 +360,87 @@ def check_cargo_manifests(files: list[Path]) -> None:
     member_dirs = resolve_workspace_member_dirs(ROOT) if any_path_dependency else set()
 
     for path, manifest in manifests:
-        for _table_name, table in _iter_dependency_tables(manifest):
+        for table_name, table in _iter_dependency_tables(manifest):
             for name, spec in (table or {}).items():
-                message = classify_dependency(name, spec, path, ROOT, member_dirs)
+                message = classify_dependency(
+                    name, spec, path, ROOT, member_dirs, table_name
+                )
                 if message:
                     fail(message)
+
+
+def storage_wasm_tooling_policy_errors(root: Path = ROOT) -> list[str]:
+    """Return fail-closed errors for the isolated binding tool's lock and deny policy."""
+    paths = {relative: root / relative for relative in WASM_TOOLING_FILES}
+    present = {relative for relative, path in paths.items() if path.is_file()}
+    if not present:
+        return []
+
+    problems: list[str] = []
+    missing = WASM_TOOLING_FILES - present
+    if missing:
+        problems.append(
+            "isolated WASM tooling is incomplete; missing "
+            + ", ".join(str(path) for path in sorted(missing))
+        )
+        return problems
+
+    lock_path = paths[WASM_TOOLING_ROOT / "Cargo.lock"]
+    deny_path = paths[WASM_TOOLING_ROOT / "deny.toml"]
+    try:
+        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+        deny = tomllib.loads(deny_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return [f"isolated WASM tooling policy could not be parsed: {exc}"]
+
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        problems.append("isolated WASM tooling Cargo.lock has no package list")
+        packages = []
+
+    versions: dict[str, set[str]] = {}
+    for package in packages:
+        if not isinstance(package, dict):
+            problems.append("isolated WASM tooling Cargo.lock has a malformed package entry")
+            continue
+        name = package.get("name")
+        version = package.get("version")
+        if isinstance(name, str) and isinstance(version, str):
+            versions.setdefault(name, set()).add(version)
+
+    for name, expected in (
+        ("wasm-bindgen-cli-support", {"0.2.127"}),
+        ("foldhash", {"0.2.0"}),
+    ):
+        if versions.get(name) != expected:
+            problems.append(
+                f"isolated WASM tooling lock must contain only {name} "
+                f"{sorted(expected)}; found {sorted(versions.get(name, set()))}"
+            )
+    if "wasm-bindgen-cli" in versions:
+        problems.append("full wasm-bindgen-cli is forbidden; use cli-support only")
+
+    licenses = deny.get("licenses")
+    if not isinstance(licenses, dict):
+        problems.append("isolated WASM tooling deny.toml has no [licenses] policy")
+    else:
+        allow = licenses.get("allow")
+        if not isinstance(allow, list) or "Zlib" in allow:
+            problems.append("Zlib must not appear in the tooling-wide license allowlist")
+        if licenses.get("exceptions") != [EXPECTED_ZLIB_EXCEPTION]:
+            problems.append(
+                "the only tooling license exception must be Zlib for foldhash@=0.2.0"
+            )
+
+    bans = deny.get("bans")
+    if not isinstance(bans, dict) or bans.get("multiple-versions") != "warn":
+        problems.append("tooling duplicate-version policy must remain warn")
+    return problems
+
+
+def check_storage_wasm_tooling_policy() -> None:
+    for message in storage_wasm_tooling_policy_errors():
+        fail(message)
 
 
 def check_remotes() -> None:
@@ -352,6 +467,7 @@ def main() -> int:
     check_no_vendored_copies(files)
     check_no_publication_workflow()
     check_cargo_manifests(files)
+    check_storage_wasm_tooling_policy()
     check_remotes()
 
     if errors:

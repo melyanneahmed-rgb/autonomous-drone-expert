@@ -27,6 +27,7 @@ test("storage source has no network, hardware, identity, firmware, or telemetry 
   const source = [
     "src/storage/indexeddb-journal-store.ts",
     "src/storage/journal-storage-contract.mjs",
+    "src/storage/wasm-journal-host.mjs",
   ].map(readWeb).join("\n");
   for (const pattern of [
     /\b(fetch|WebSocket|EventSource|XMLHttpRequest|sendBeacon)\b/,

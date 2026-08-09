@@ -1,0 +1,15 @@
+[package]
+name = "ade-web-storage-wasm-bridge"
+description = "Storage-only WASM facade for the Rust-owned effect journal state machine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ade-casebook = { path = "../casebook" }
+ade-runtime-ports = { path = "../runtime-ports" }
+wasm-bindgen = { version = "=0.2.127", default-features = false, features = ["std"] }

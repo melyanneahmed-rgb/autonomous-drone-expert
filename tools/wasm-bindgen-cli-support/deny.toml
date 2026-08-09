@@ -1,0 +1,38 @@
+# Build-tool-only cargo-deny policy. This graph is deliberately separate from the product
+# workspace and is pinned by tools/wasm-bindgen-cli-support/Cargo.lock.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+db-path = "target/cargo-deny-advisory-dbs"
+yanked = "deny"
+unmaintained = "all"
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+# The repository's own unpublished tool has no final project license yet. This ignores only
+# the private root package; every third-party crate remains subject to the allowlist below.
+private = { ignore = true }
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Unicode-3.0",
+]
+# The audited tooling closure contains foldhash 0.2.0 under Zlib. Keep that license out
+# of the global allowlist and bind the exception to this exact package version.
+exceptions = [
+    { allow = ["Zlib"], crate = "foldhash@=0.2.0" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
