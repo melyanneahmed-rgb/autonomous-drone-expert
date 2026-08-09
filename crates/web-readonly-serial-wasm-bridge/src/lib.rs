@@ -231,9 +231,13 @@ pub struct WasmReadonlySerialDiscovery {
 
 impl WasmReadonlySerialDiscovery {
     fn create() -> Result<Self, BridgeError> {
+        Self::create_in_state(SessionState::Identifying)
+    }
+
+    fn create_in_state(state: SessionState) -> Result<Self, BridgeError> {
         Ok(Self {
             coordinator: IoCoordinator::new(),
-            identification: ReadonlyIdentification::new(SessionState::Identifying)?,
+            identification: ReadonlyIdentification::new(state)?,
             phase: Phase::Ready,
             pending_id: None,
             accumulator: None,
@@ -568,6 +572,45 @@ mod tests {
             .unwrap();
             assert_eq!(directive.kind, "exchange-identification-read");
             assert_eq!(directive.bytes, bytes);
+        }
+    }
+
+    #[test]
+    fn refused_identification_contexts_cannot_create_a_web_serial_directive() {
+        let all_states = [
+            SessionState::Disconnected,
+            SessionState::Connecting,
+            SessionState::Identifying,
+            SessionState::SnapshotRead,
+            SessionState::Planning,
+            SessionState::AwaitingApproval,
+            SessionState::BackingUp,
+            SessionState::ApplyingTransient,
+            SessionState::TransientWritePendingReconcileOnResume,
+            SessionState::Saving,
+            SessionState::Rebooting,
+            SessionState::Reconnecting,
+            SessionState::Verifying,
+            SessionState::Recovering,
+            SessionState::CompletedVerified,
+            SessionState::CompletedRestored,
+            SessionState::StateUnknownRecoveryRequired,
+        ];
+
+        for state in all_states {
+            match WasmReadonlySerialDiscovery::create_in_state(state) {
+                Ok(mut discovery) => {
+                    assert!(state.permits_identification(), "unexpected state {state:?}");
+                    assert_eq!(
+                        discovery.begin_open().unwrap().kind,
+                        "open-selected-read-only-port",
+                    );
+                }
+                Err(BridgeError::Execution) => {
+                    assert!(!state.permits_identification(), "refused state {state:?}");
+                }
+                Err(error) => panic!("unexpected error for {state:?}: {error:?}"),
+            }
         }
     }
 

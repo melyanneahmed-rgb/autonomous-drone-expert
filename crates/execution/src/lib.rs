@@ -105,6 +105,11 @@ pub enum ExecError {
         /// The class that was refused.
         class: WriteCommandClass,
     },
+    /// The canonical identity sequence cannot start in the current lifecycle context.
+    IdentificationNotPermittedInState {
+        /// The state in which identification was refused.
+        state: SessionState,
+    },
     /// The approval was granted for a different execution target.
     ApprovalTargetMismatch,
     /// The approval was granted for a different write class.
@@ -219,14 +224,13 @@ pub struct ReadonlyIdentification {
 }
 
 impl ReadonlyIdentification {
-    /// Create the canonical sequence in a state that permits read-only I/O.
+    /// Create the canonical sequence in an explicit identity context.
     ///
     /// # Errors
-    /// Refuses states where `NoWrite` traffic is not permitted.
+    /// Refuses every state except `Identifying`, `Verifying`, and `Recovering`.
     pub fn new(state: SessionState) -> Result<Self, ExecError> {
-        let class = WriteCommandClass::NoWrite;
-        if !state.permits_command_class(class) {
-            return Err(ExecError::NotPermittedInState { state, class });
+        if !state.permits_identification() {
+            return Err(ExecError::IdentificationNotPermittedInState { state });
         }
         Ok(Self {
             stage: IdentificationStage::ApiVersion,
@@ -892,6 +896,22 @@ mod tests {
     }
 
     #[test]
+    fn identification_runs_in_initial_post_reboot_and_recovery_contexts() {
+        for state in [
+            SessionState::Identifying,
+            SessionState::Verifying,
+            SessionState::Recovering,
+        ] {
+            let mut executor = Executor::new_simulation(ExecutionTarget::Mock).unwrap();
+            let mut transport = mock_transport();
+            let identity = executor.identify(&mut transport, state).unwrap();
+            assert_eq!(&identity.variant.identifier, b"BTFL", "state {state:?}");
+            assert_eq!(identity.version.major, 4, "state {state:?}");
+            assert_eq!(identity.target_name, "SPEEDYBEEF405V4", "state {state:?}");
+        }
+    }
+
+    #[test]
     fn incremental_and_native_identification_share_order_and_identity() {
         let mut executor = Executor::new_simulation(ExecutionTarget::Mock).unwrap();
         let mut transport = mock_transport();
@@ -929,15 +949,46 @@ mod tests {
     }
 
     #[test]
-    fn incremental_identification_refuses_wrong_state_and_parallel_progress() {
-        assert_eq!(
-            ReadonlyIdentification::new(SessionState::Connecting).unwrap_err(),
-            ExecError::NotPermittedInState {
-                state: SessionState::Connecting,
-                class: WriteCommandClass::NoWrite,
-            }
-        );
+    fn incremental_identification_has_an_exhaustive_context_allowlist() {
+        let all_states = [
+            SessionState::Disconnected,
+            SessionState::Connecting,
+            SessionState::Identifying,
+            SessionState::SnapshotRead,
+            SessionState::Planning,
+            SessionState::AwaitingApproval,
+            SessionState::BackingUp,
+            SessionState::ApplyingTransient,
+            SessionState::TransientWritePendingReconcileOnResume,
+            SessionState::Saving,
+            SessionState::Rebooting,
+            SessionState::Reconnecting,
+            SessionState::Verifying,
+            SessionState::Recovering,
+            SessionState::CompletedVerified,
+            SessionState::CompletedRestored,
+            SessionState::StateUnknownRecoveryRequired,
+        ];
 
+        for state in all_states {
+            if state.permits_identification() {
+                let mut identification = ReadonlyIdentification::new(state).unwrap();
+                assert_eq!(
+                    identification.next_request().unwrap().command(),
+                    CommandId::ApiVersion,
+                    "first request drifted for {state:?}",
+                );
+            } else {
+                assert_eq!(
+                    ReadonlyIdentification::new(state).unwrap_err(),
+                    ExecError::IdentificationNotPermittedInState { state },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_identification_refuses_parallel_progress() {
         let mut identification = ReadonlyIdentification::new(SessionState::Identifying).unwrap();
         assert_eq!(
             identification
