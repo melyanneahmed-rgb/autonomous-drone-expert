@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   StorageWasmHostProtocolError,
@@ -9,6 +11,8 @@ import {
 } from "../src/storage/wasm-journal-host.mjs";
 
 const EMPTY_ADEJ = Uint8Array.from([65, 68, 69, 74, 1, 0, 0, 0]);
+const webRoot = fileURLToPath(new URL("..", import.meta.url));
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 function loadDirective(requestId = "1") {
   return {
@@ -95,23 +99,50 @@ test("repair is a second Rust-emitted CAS and not a JavaScript journal rewrite",
   assert.deepEqual(calls, [["2", "8"]]);
 });
 
-test("CAS revisions cross the host only as bigint and canonical decimal text", async () => {
+test("Rust-emitted repair CAS crosses the host only as bigint and canonical decimal text", async () => {
   const calls = [];
   const bridge = {
-    beginAppendMarker: () => casDirective("9007199254740993"),
+    beginLoad: () => loadDirective(),
+    acceptLoadFound: (requestId, revision) => (
+      calls.push(["load", requestId, revision]), "repair-required"
+    ),
+    takeRepairEffect: () => casDirective("9007199254740993"),
     acceptCommitSuccess: (requestId, revision) => (
-      calls.push([requestId, revision]), "append-committed"
+      calls.push(["commit", requestId, revision]), "repair-committed"
     ),
   };
   const store = {
+    load: async () => ({
+      ok: true,
+      value: { revision: 9007199254740993n, bytes: EMPTY_ADEJ },
+    }),
     compareAndSwap: async (_key, expectedRevision) => {
       assert.equal(expectedRevision, 9007199254740993n);
       return { ok: true, value: 9007199254740994n };
     },
   };
   const host = new WasmJournalHost(bridge, store);
-  assert.equal(await host.appendMarker("identity-read"), "append-committed");
-  assert.deepEqual(calls, [["2", "9007199254740994"]]);
+  assert.equal(await host.load(), "repair-committed");
+  assert.deepEqual(calls, [
+    ["load", "1", "9007199254740993"],
+    ["commit", "2", "9007199254740994"],
+  ]);
+});
+
+test("production storage ABI exposes no JavaScript-selected journal event", () => {
+  const rust = fs.readFileSync(
+    `${repoRoot}/crates/web-storage-wasm-bridge/src/lib.rs`,
+    "utf8",
+  );
+  const host = fs.readFileSync(`${webRoot}/src/storage/wasm-journal-host.mjs`, "utf8");
+  const declarations = fs.readFileSync(
+    `${webRoot}/src/storage/wasm-journal-host.d.mts`,
+    "utf8",
+  );
+
+  assert.doesNotMatch(rust, /parse_marker|begin_append_marker|js_name\s*=\s*beginAppendMarker/);
+  assert.doesNotMatch(host, /\bappendMarker\b|\bbeginAppendMarker\b/);
+  assert.doesNotMatch(declarations, /\bappendMarker\b|\bbeginAppendMarker\b/);
 });
 
 test("unknown directives and malformed load/CAS shapes fail closed", async () => {

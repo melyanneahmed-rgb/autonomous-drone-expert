@@ -11,7 +11,6 @@ export type StorageDirective = {
 
 export interface RustJournalBridge {
   beginLoad(): StorageDirective;
-  beginAppendMarker(marker: string): StorageDirective;
   acceptLoadMissing(requestId: string): string;
   acceptLoadFound(requestId: string, revision: string, bytes: Uint8Array): string;
   acceptLoadFailure(requestId: string, failure: string): string;
@@ -29,5 +28,4 @@ export class WasmJournalHost {
   constructor(bridge: RustJournalBridge, store: IndexedDbJournalStore);
   execute(directive: StorageDirective): Promise<string>;
   load(): Promise<"loaded" | "repair-committed">;
-  appendMarker(marker: string): Promise<"append-committed">;
 }

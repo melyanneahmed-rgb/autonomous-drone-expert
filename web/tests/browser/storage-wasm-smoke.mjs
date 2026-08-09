@@ -2,7 +2,16 @@ import { IndexedDbJournalStore, JOURNAL_DATABASE_NAME, JOURNAL_DATABASE_VERSION,
 import { WasmJournalHost } from "/wasm-journal-host.mjs";
 import initWasm, { WasmJournalStore } from "/wasm/ade_web_storage_wasm_bridge.js";
 
-const EMPTY_ADEJ = Uint8Array.from([65, 68, 69, 74, 1, 0, 0, 0]);
+// Fixed test-only ADEJ fixture: header plus one IdentityRead record. Production JavaScript
+// never constructs journal records or chooses JournalEvent values.
+const VALID_ONE_EVENT_ADEJ = Uint8Array.from([
+  65, 68, 69, 74, 1, 0, 0, 0,
+  1, 0, 0, 0, 2, 69, 96, 12, 7,
+]);
+const TORN_ONE_EVENT_ADEJ = Uint8Array.from([
+  ...VALID_ONE_EVENT_ADEJ,
+  4, 0, 0, 0, 9,
+]);
 
 const mark = (step) => {
   document.querySelector("#result").textContent = `STORAGE_WASM_BROWSER_RUNNING:${step}`;
@@ -76,23 +85,7 @@ async function scenarioEmptyLoad(adapter) {
 async function scenarioTornRepair(adapter) {
   mark("B-torn-tail-repair");
   const key = "wasm-torn-repair";
-  const seed = new WasmJournalStore(key, 4096);
-  let validBytes;
-  try {
-    const seedHost = new WasmJournalHost(seed, adapter);
-    await seedHost.load();
-    const append = seed.beginAppendMarker("identity-read");
-    try {
-      validBytes = Uint8Array.from(append.bytes);
-    } finally {
-      append.free();
-    }
-  } finally {
-    seed.free();
-  }
-
-  const tornBytes = Uint8Array.from([...validBytes, 4, 0, 0, 0, 9]);
-  const seeded = await adapter.compareAndSwap(key, null, tornBytes);
+  const seeded = await adapter.compareAndSwap(key, null, TORN_ONE_EVENT_ADEJ);
   assert(seeded.ok && seeded.value === 1n, "torn fixture commit");
 
   const repair = new WasmJournalStore(key, 4096);
@@ -113,7 +106,10 @@ async function scenarioTornRepair(adapter) {
     assert(reopened.revision === "2", "clean reopen revision");
     const stored = await adapter.load(key);
     assert(stored.ok && stored.value?.revision === 2n, "stored repaired revision");
-    assert(equalBytes(stored.value.bytes, validBytes), "Rust-selected repaired bytes");
+    assert(
+      equalBytes(stored.value.bytes, VALID_ONE_EVENT_ADEJ),
+      "Rust-selected repaired bytes",
+    );
   } finally {
     reopened.free();
   }
@@ -122,28 +118,26 @@ async function scenarioTornRepair(adapter) {
 async function scenarioStaleCas(adapter) {
   mark("C-stale-cas");
   const key = "wasm-stale-cas";
-  const writer = new WasmJournalStore(key, 4096);
-  try {
-    const writerHost = new WasmJournalHost(writer, adapter);
-    await writerHost.load();
-    await writerHost.appendMarker("identity-read");
-    assert(writer.revision === "1", "writer seed revision");
-  } finally {
-    writer.free();
-  }
+  await rawPutRecord(key, "1", TORN_ONE_EVENT_ADEJ);
 
   const stale = new WasmJournalStore(key, 4096);
   try {
     const staleHost = new WasmJournalHost(stale, adapter);
-    await staleHost.load();
-    const pending = stale.beginAppendMarker("snapshot-read");
-    const competingBytes = Uint8Array.from(pending.bytes);
-    const competing = await adapter.compareAndSwap(key, 1n, competingBytes);
+    assert(
+      await staleHost.execute(stale.beginLoad()) === "repair-required",
+      "Rust emitted repair requirement",
+    );
+    const pending = stale.takeRepairEffect();
+    assert(pending.expectedRevision === "1", "repair expected seeded revision");
+    const competing = await adapter.compareAndSwap(key, 1n, VALID_ONE_EVENT_ADEJ);
     assert(competing.ok && competing.value === 2n, "competing CAS");
     await assertRejected(() => staleHost.execute(pending), "Conflict");
-    assert(stale.eventCount === 1, "stale event was not accepted");
-    assert(stale.revision === "1", "stale Rust revision was not invented");
+    assert(stale.eventCount === 0, "stale repair was not accepted");
+    assert(stale.revision === undefined, "stale Rust revision was not invented");
     assert(stale.hasPending === false, "matching conflict consumed operation");
+    const stored = await adapter.load(key);
+    assert(stored.ok && stored.value?.revision === 2n, "competing revision retained");
+    assert(equalBytes(stored.value.bytes, VALID_ONE_EVENT_ADEJ), "no last-write-wins");
   } finally {
     stale.free();
   }
@@ -175,20 +169,33 @@ function scenarioResponseRefusals() {
 async function scenarioExactU64(adapter) {
   mark("E-exact-u64");
   const key = "wasm-u64-exact";
-  await rawPutRecord(key, "9007199254740993", EMPTY_ADEJ);
+  await rawPutRecord(key, "9007199254740993", TORN_ONE_EVENT_ADEJ);
   const bridge = new WasmJournalStore(key, 4096);
   try {
     const host = new WasmJournalHost(bridge, adapter);
-    await host.load();
-    assert(bridge.revision === "9007199254740993", "high revision load text");
-    const append = bridge.beginAppendMarker("identity-read");
-    assert(append.expectedRevision === "9007199254740993", "high expected revision text");
-    assert(await host.execute(append) === "append-committed", "high revision append");
+    assert(
+      await host.execute(bridge.beginLoad()) === "repair-required",
+      "high revision repair requirement",
+    );
+    const repair = bridge.takeRepairEffect();
+    assert(repair.expectedRevision === "9007199254740993", "high expected revision text");
+    assert(await host.execute(repair) === "repair-committed", "high revision repair");
     assert(bridge.revision === "9007199254740994", "high revision commit text");
     const stored = await adapter.load(key);
     assert(stored.ok && stored.value?.revision === 9007199254740994n, "high IndexedDB bigint");
+    assert(equalBytes(stored.value.bytes, VALID_ONE_EVENT_ADEJ), "high revision repaired bytes");
   } finally {
     bridge.free();
+  }
+
+  const reopened = new WasmJournalStore(key, 4096);
+  try {
+    const host = new WasmJournalHost(reopened, adapter);
+    assert(await host.load() === "loaded", "high revision exact reopen");
+    assert(reopened.revision === "9007199254740994", "high reopen revision text");
+    assert(reopened.eventCount === 1, "high reopen event count");
+  } finally {
+    reopened.free();
   }
 }
 
@@ -200,6 +207,14 @@ async function run() {
       globalThis.location.href,
     ),
   });
+  assert(
+    typeof WasmJournalStore.prototype.beginAppendMarker === "undefined",
+    "production WASM exposes no JournalEvent append API",
+  );
+  assert(
+    typeof WasmJournalHost.prototype.appendMarker === "undefined",
+    "production host exposes no JournalEvent append API",
+  );
   const adapter = new IndexedDbJournalStore();
   try {
     await scenarioEmptyLoad(adapter);

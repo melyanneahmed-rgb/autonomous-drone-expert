@@ -100,12 +100,6 @@ export class WasmJournalHost {
     return requireOutcome(repaired, "repair-committed");
   }
 
-  async appendMarker(marker) {
-    if (typeof marker !== "string") refuse("INVALID_APPEND_MARKER");
-    const outcome = await this.execute(this.#bridge.beginAppendMarker(marker));
-    return requireOutcome(outcome, "append-committed");
-  }
-
   async #executeLoad(directive, requestId) {
     if (
       directive.expectedRevision !== undefined ||

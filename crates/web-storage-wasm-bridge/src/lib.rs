@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use ade_casebook::{EffectJournalError, EffectJournalOutcome, EffectJournalStore, JournalEvent};
+use ade_casebook::{EffectJournalError, EffectJournalOutcome, EffectJournalStore};
 use ade_runtime_ports::{
     IoEffect, IoResponse, RequestId, StorageEffect, StorageFailure, StorageKey, StorageResult,
     StorageRevision, StoredValue,
@@ -26,7 +26,6 @@ enum BridgeError {
     Core(EffectJournalError),
     InvalidDecimal(&'static str),
     InvalidStorageFailure,
-    InvalidAppendMarker,
     NonStorageEffect,
     NoRepairEffect,
 }
@@ -40,9 +39,6 @@ impl fmt::Display for BridgeError {
             }
             Self::InvalidStorageFailure => {
                 formatter.write_str("RUST_STORAGE_REFUSAL:INVALID_STORAGE_FAILURE")
-            }
-            Self::InvalidAppendMarker => {
-                formatter.write_str("RUST_STORAGE_REFUSAL:INVALID_APPEND_MARKER")
             }
             Self::NonStorageEffect => {
                 formatter.write_str("RUST_STORAGE_REFUSAL:NON_STORAGE_EFFECT")
@@ -83,23 +79,6 @@ fn parse_failure(value: &str) -> Result<StorageFailure, BridgeError> {
         "Cancelled" => Ok(StorageFailure::Cancelled),
         "Unknown" => Ok(StorageFailure::Unknown),
         _ => Err(BridgeError::InvalidStorageFailure),
-    }
-}
-
-fn parse_marker(value: &str) -> Result<JournalEvent, BridgeError> {
-    match value {
-        "identity-read" => Ok(JournalEvent::IdentityRead),
-        "snapshot-read" => Ok(JournalEvent::SnapshotRead),
-        "backed-up" => Ok(JournalEvent::BackedUp),
-        "re-read-before-save" => Ok(JournalEvent::ReReadBeforeSave),
-        "saved" => Ok(JournalEvent::Saved),
-        "rebooted" => Ok(JournalEvent::Rebooted),
-        "reconnected" => Ok(JournalEvent::Reconnected),
-        "verified" => Ok(JournalEvent::Verified),
-        "recovery-started" => Ok(JournalEvent::RecoveryStarted),
-        "restored" => Ok(JournalEvent::Restored),
-        "state-unknown" => Ok(JournalEvent::StateUnknown),
-        _ => Err(BridgeError::InvalidAppendMarker),
     }
 }
 
@@ -193,10 +172,6 @@ impl WasmJournalStore {
         directive_from(self.store.begin_load()?)
     }
 
-    fn do_begin_append(&mut self, marker: &str) -> Result<WasmStorageDirective, BridgeError> {
-        directive_from(self.store.begin_append(parse_marker(marker)?)?)
-    }
-
     fn accept(&mut self, response: IoResponse) -> Result<&'static str, BridgeError> {
         match self.store.accept_response(response)? {
             EffectJournalOutcome::Loaded => Ok(OUTCOME_LOADED),
@@ -275,6 +250,14 @@ impl WasmJournalStore {
     fn take_repair(&mut self) -> Result<WasmStorageDirective, BridgeError> {
         self.repair_effect.take().ok_or(BridgeError::NoRepairEffect)
     }
+
+    #[cfg(test)]
+    fn begin_append_for_test(
+        &mut self,
+        event: ade_casebook::JournalEvent,
+    ) -> Result<WasmStorageDirective, BridgeError> {
+        directive_from(self.store.begin_append(event)?)
+    }
 }
 
 #[wasm_bindgen]
@@ -287,11 +270,6 @@ impl WasmJournalStore {
     #[wasm_bindgen(js_name = beginLoad)]
     pub fn begin_load(&mut self) -> Result<WasmStorageDirective, JsError> {
         self.do_begin_load().map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = beginAppendMarker)]
-    pub fn begin_append_marker(&mut self, marker: &str) -> Result<WasmStorageDirective, JsError> {
-        self.do_begin_append(marker).map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = acceptLoadMissing)]
@@ -374,6 +352,7 @@ impl WasmJournalStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ade_casebook::JournalEvent;
 
     const EMPTY_ADEJ: &[u8] = b"ADEJ\x01\x00\x00\x00";
 
@@ -394,7 +373,9 @@ mod tests {
     #[test]
     fn directives_use_canonical_decimal_text_and_storage_only_kinds() {
         let mut bridge = empty_loaded("wasm-directive");
-        let directive = bridge.do_begin_append("identity-read").unwrap();
+        let directive = bridge
+            .begin_append_for_test(JournalEvent::IdentityRead)
+            .unwrap();
         assert_eq!(directive.request_id, "2");
         assert_eq!(directive.kind, "compare-and-swap");
         assert_eq!(directive.key, "wasm-directive");
@@ -425,7 +406,9 @@ mod tests {
     #[test]
     fn rust_owns_torn_tail_repair_before_journal_becomes_visible() {
         let mut seed = empty_loaded("wasm-repair");
-        let append = seed.do_begin_append("identity-read").unwrap();
+        let append = seed
+            .begin_append_for_test(JournalEvent::IdentityRead)
+            .unwrap();
         let mut torn = append.bytes.clone();
         torn.extend([4, 0, 0, 0, 9]);
 
@@ -461,7 +444,9 @@ mod tests {
         bridge
             .do_accept_load_found(&load.request_id, "7", EMPTY_ADEJ.to_vec())
             .unwrap();
-        let append = bridge.do_begin_append("snapshot-read").unwrap();
+        let append = bridge
+            .begin_append_for_test(JournalEvent::SnapshotRead)
+            .unwrap();
         assert!(
             bridge
                 .do_accept_commit_failure(&append.request_id, "Conflict")
@@ -480,7 +465,9 @@ mod tests {
             .do_accept_load_found(&load.request_id, "9007199254740993", EMPTY_ADEJ.to_vec())
             .unwrap();
         assert_eq!(bridge.revision_text().as_deref(), Some("9007199254740993"));
-        let append = bridge.do_begin_append("identity-read").unwrap();
+        let append = bridge
+            .begin_append_for_test(JournalEvent::IdentityRead)
+            .unwrap();
         assert_eq!(
             append.expected_revision.as_deref(),
             Some("9007199254740993")
