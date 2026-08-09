@@ -147,42 +147,76 @@ class DependencyPolicyTests(unittest.TestCase):
         self.assertIsNotNone(self.classify("serde", "1.0"))
         self.assertIsNotNone(self.classify("serde", {"version": "1.0"}))
 
-    def test_exact_wasm_bindgen_runtime_exception_is_location_and_shape_bound(self) -> None:
-        manifest = self.root / "crates" / "web-storage-wasm-bridge" / "Cargo.toml"
+    def test_exact_wasm_bindgen_runtime_exceptions_are_location_and_shape_bound(self) -> None:
         spec = {
             "version": "=0.2.127",
             "default-features": False,
             "features": ["std"],
         }
-        self.assertIsNone(
-            check_isolation.classify_dependency(
-                "wasm-bindgen", spec, manifest, self.root, self.member_dirs
+        allowed = [
+            self.root / "crates" / "web-storage-wasm-bridge" / "Cargo.toml",
+            self.root / "crates" / "web-readonly-serial-wasm-bridge" / "Cargo.toml",
+        ]
+        for manifest in allowed:
+            self.assertIsNone(
+                check_isolation.classify_dependency(
+                    "wasm-bindgen", spec, manifest, self.root, self.member_dirs
+                )
             )
-        )
-        drift = {**spec, "version": "=0.2.126"}
+            for drift in (
+                {**spec, "version": "=0.2.126"},
+                {**spec, "features": []},
+                {**spec, "default-features": True},
+                {**spec, "package": "wasm-bindgen"},
+            ):
+                self.assertIsNotNone(
+                    check_isolation.classify_dependency(
+                        "wasm-bindgen", drift, manifest, self.root, self.member_dirs
+                    )
+                )
+            for table in ("dev-dependencies", "build-dependencies", "target.dependencies"):
+                self.assertIsNotNone(
+                    check_isolation.classify_dependency(
+                        "wasm-bindgen",
+                        spec,
+                        manifest,
+                        self.root,
+                        self.member_dirs,
+                        table,
+                    )
+                )
+
         self.assertIsNotNone(
             check_isolation.classify_dependency(
-                "wasm-bindgen", drift, manifest, self.root, self.member_dirs
+                "wasm-bindgen", spec, self.beta_manifest, self.root, self.member_dirs
             )
         )
-        self.assertIsNotNone(
-            check_isolation.classify_dependency(
-                "wasm-bindgen",
-                spec,
-                self.beta_manifest,
-                self.root,
-                self.member_dirs,
+
+    def test_forbidden_wasm_runtime_neighbors_are_rejected_everywhere(self) -> None:
+        manifest = self.root / "crates" / "web-readonly-serial-wasm-bridge" / "Cargo.toml"
+        for name in (
+            "js-sys",
+            "web-sys",
+            "wasm-bindgen-futures",
+            "serde",
+            "serde-wasm-bindgen",
+        ):
+            self.assertIsNotNone(
+                check_isolation.classify_dependency(
+                    name,
+                    {"version": "=0.2.127"},
+                    manifest,
+                    self.root,
+                    self.member_dirs,
+                )
             )
+
+    def test_new_git_and_wildcard_dependency_shapes_remain_rejected(self) -> None:
+        self.assertIsNotNone(
+            self.classify("wasm-bindgen", {"git": "https://example.invalid/bindgen"})
         )
         self.assertIsNotNone(
-            check_isolation.classify_dependency(
-                "wasm-bindgen",
-                spec,
-                manifest,
-                self.root,
-                self.member_dirs,
-                "dev-dependencies",
-            )
+            self.classify("wasm-bindgen", "*")
         )
 
     def test_exact_cli_support_exception_is_tooling_only(self) -> None:
