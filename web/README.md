@@ -27,8 +27,9 @@ outside `web/` are rejected by `scripts/check_web_dependencies.py`.
 - TypeScript/React is the Web shell; Rust remains the deterministic product core.
 - UI code consumes product contracts. It does not build protocol frames or own write
   authority.
-- No IndexedDB, Web Serial, WASM binding or hardware implementation is authorized by this
-  package lock.
+- IndexedDB remains the only browser persistence authority. The storage-only WASM host driver
+  executes Rust-emitted load/CAS directives but cannot create journal bytes or accept state.
+- Web Serial, hardware, firmware and general-purpose WASM bindings remain deferred.
 - Android/APK source, wrappers and dependencies remain deferred and prohibited.
 - The visible USB chooser is intentionally non-functional in this gate: it reports the
   deferred capability and never contacts a device or claims selection success.
