@@ -350,5 +350,74 @@ class WorkspaceMembershipViaCargoMetadataTests(unittest.TestCase):
         self.assertIsNone(check_isolation.resolve_workspace_member_dirs(empty))
 
 
+class StorageWasmToolingPolicyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.tool = self.root / "tools" / "wasm-bindgen-cli-support"
+        self.tool.mkdir(parents=True)
+        (self.tool / "Cargo.toml").write_text(
+            '[package]\nname = "ade-wasm-bindgen-tool"\nversion = "0.0.0"\n',
+            encoding="utf-8",
+        )
+        self._write_lock()
+        self._write_deny()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write_lock(self, extra: str = "") -> None:
+        (self.tool / "Cargo.lock").write_text(
+            'version = 4\n\n'
+            '[[package]]\nname = "wasm-bindgen-cli-support"\nversion = "0.2.127"\n\n'
+            '[[package]]\nname = "foldhash"\nversion = "0.2.0"\n'
+            f"{extra}",
+            encoding="utf-8",
+        )
+
+    def _write_deny(self, exception: str = 'foldhash@=0.2.0', zlib_global: bool = False) -> None:
+        allow = '["MIT", "Zlib"]' if zlib_global else '["MIT"]'
+        (self.tool / "deny.toml").write_text(
+            f'[licenses]\nallow = {allow}\n'
+            f'exceptions = [{{ allow = ["Zlib"], crate = "{exception}" }}]\n\n'
+            '[bans]\nmultiple-versions = "warn"\n',
+            encoding="utf-8",
+        )
+
+    def test_exact_lock_and_scoped_zlib_exception_pass(self) -> None:
+        self.assertEqual(
+            check_isolation.storage_wasm_tooling_policy_errors(self.root), []
+        )
+
+    def test_full_cli_in_lock_is_rejected(self) -> None:
+        self._write_lock(
+            '\n[[package]]\nname = "wasm-bindgen-cli"\nversion = "0.2.127"\n'
+        )
+        errors = check_isolation.storage_wasm_tooling_policy_errors(self.root)
+        self.assertTrue(any("full wasm-bindgen-cli" in error for error in errors))
+
+    def test_foldhash_or_exception_version_drift_is_rejected(self) -> None:
+        (self.tool / "Cargo.lock").write_text(
+            'version = 4\n\n'
+            '[[package]]\nname = "wasm-bindgen-cli-support"\nversion = "0.2.127"\n\n'
+            '[[package]]\nname = "foldhash"\nversion = "0.2.1"\n',
+            encoding="utf-8",
+        )
+        self._write_deny(exception="foldhash@=0.2")
+        errors = check_isolation.storage_wasm_tooling_policy_errors(self.root)
+        self.assertTrue(any("foldhash" in error for error in errors))
+        self.assertTrue(any("only tooling license exception" in error for error in errors))
+
+    def test_global_zlib_allowance_is_rejected(self) -> None:
+        self._write_deny(zlib_global=True)
+        errors = check_isolation.storage_wasm_tooling_policy_errors(self.root)
+        self.assertTrue(any("Zlib must not" in error for error in errors))
+
+    def test_partial_tooling_tree_is_rejected(self) -> None:
+        (self.tool / "Cargo.lock").unlink()
+        errors = check_isolation.storage_wasm_tooling_policy_errors(self.root)
+        self.assertTrue(any("incomplete" in error for error in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

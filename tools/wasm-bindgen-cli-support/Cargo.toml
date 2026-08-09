@@ -1,0 +1,14 @@
+[package]
+name = "ade-wasm-bindgen-tool"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.86.0"
+publish = false
+
+[dependencies]
+wasm-bindgen-cli-support = { version = "=0.2.127" }
+
+# This tool intentionally has its own dependency graph, lockfile, MSRV, and deny policy.
+# It is build tooling only and must never become a member of the product workspace.
+[workspace]
+resolver = "2"

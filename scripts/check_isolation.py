@@ -48,6 +48,17 @@ AUDITED_REGISTRY_DEPENDENCIES = {
     ): {"version": "=0.2.127"},
 }
 
+WASM_TOOLING_ROOT = PurePosixPath("tools/wasm-bindgen-cli-support")
+WASM_TOOLING_FILES = {
+    WASM_TOOLING_ROOT / "Cargo.toml",
+    WASM_TOOLING_ROOT / "Cargo.lock",
+    WASM_TOOLING_ROOT / "deny.toml",
+}
+EXPECTED_ZLIB_EXCEPTION = {
+    "allow": ["Zlib"],
+    "crate": "foldhash@=0.2.0",
+}
+
 LICENSE_FILENAMES = {
     "license",
     "license.md",
@@ -358,6 +369,80 @@ def check_cargo_manifests(files: list[Path]) -> None:
                     fail(message)
 
 
+def storage_wasm_tooling_policy_errors(root: Path = ROOT) -> list[str]:
+    """Return fail-closed errors for the isolated binding tool's lock and deny policy."""
+    paths = {relative: root / relative for relative in WASM_TOOLING_FILES}
+    present = {relative for relative, path in paths.items() if path.is_file()}
+    if not present:
+        return []
+
+    problems: list[str] = []
+    missing = WASM_TOOLING_FILES - present
+    if missing:
+        problems.append(
+            "isolated WASM tooling is incomplete; missing "
+            + ", ".join(str(path) for path in sorted(missing))
+        )
+        return problems
+
+    lock_path = paths[WASM_TOOLING_ROOT / "Cargo.lock"]
+    deny_path = paths[WASM_TOOLING_ROOT / "deny.toml"]
+    try:
+        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+        deny = tomllib.loads(deny_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return [f"isolated WASM tooling policy could not be parsed: {exc}"]
+
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        problems.append("isolated WASM tooling Cargo.lock has no package list")
+        packages = []
+
+    versions: dict[str, set[str]] = {}
+    for package in packages:
+        if not isinstance(package, dict):
+            problems.append("isolated WASM tooling Cargo.lock has a malformed package entry")
+            continue
+        name = package.get("name")
+        version = package.get("version")
+        if isinstance(name, str) and isinstance(version, str):
+            versions.setdefault(name, set()).add(version)
+
+    for name, expected in (
+        ("wasm-bindgen-cli-support", {"0.2.127"}),
+        ("foldhash", {"0.2.0"}),
+    ):
+        if versions.get(name) != expected:
+            problems.append(
+                f"isolated WASM tooling lock must contain only {name} "
+                f"{sorted(expected)}; found {sorted(versions.get(name, set()))}"
+            )
+    if "wasm-bindgen-cli" in versions:
+        problems.append("full wasm-bindgen-cli is forbidden; use cli-support only")
+
+    licenses = deny.get("licenses")
+    if not isinstance(licenses, dict):
+        problems.append("isolated WASM tooling deny.toml has no [licenses] policy")
+    else:
+        allow = licenses.get("allow")
+        if not isinstance(allow, list) or "Zlib" in allow:
+            problems.append("Zlib must not appear in the tooling-wide license allowlist")
+        if licenses.get("exceptions") != [EXPECTED_ZLIB_EXCEPTION]:
+            problems.append(
+                "the only tooling license exception must be Zlib for foldhash@=0.2.0"
+            )
+
+    bans = deny.get("bans")
+    if not isinstance(bans, dict) or bans.get("multiple-versions") != "warn":
+        problems.append("tooling duplicate-version policy must remain warn")
+    return problems
+
+
+def check_storage_wasm_tooling_policy() -> None:
+    for message in storage_wasm_tooling_policy_errors():
+        fail(message)
+
+
 def check_remotes() -> None:
     try:
         out = subprocess.run(
@@ -382,6 +467,7 @@ def main() -> int:
     check_no_vendored_copies(files)
     check_no_publication_workflow()
     check_cargo_manifests(files)
+    check_storage_wasm_tooling_policy()
     check_remotes()
 
     if errors:
