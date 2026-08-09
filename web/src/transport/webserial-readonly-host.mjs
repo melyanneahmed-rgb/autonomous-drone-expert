@@ -188,7 +188,9 @@ export class WebSerialReadonlyHost {
         scopeMismatchField: discovery.scopeMismatchField ?? undefined,
       };
     } finally {
-      if (this.#opened || this.#reader || this.#writer) await this.#cleanup();
+      if (this.#selectedPort || this.#opened || this.#reader || this.#writer) {
+        await this.#cleanup();
+      }
     }
   }
 }
