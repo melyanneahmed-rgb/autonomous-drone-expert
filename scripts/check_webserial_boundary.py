@@ -35,7 +35,8 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
     adapter = files.get(ADAPTER)
     if adapter is None:
         return [f"missing designated Web Serial adapter: {ADAPTER}"]
-    if DECLARATION not in files:
+    declaration = files.get(DECLARATION)
+    if declaration is None:
         errors.append(f"missing first-party Web Serial declaration: {DECLARATION}")
 
     serial_patterns = {
@@ -64,6 +65,52 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
     for marker in required:
         if marker not in adapter:
             errors.append(f"designated adapter is missing required bounded behavior: {marker}")
+
+    binding_module = "/wasm/ade_web_readonly_serial_wasm_bridge.js"
+    import_match = re.search(
+        rf'import\s*\{{(?P<names>[^}}]+)\}}\s*from\s*["\']{re.escape(binding_module)}["\']',
+        adapter,
+        re.DOTALL,
+    )
+    imported_names = set()
+    if import_match is not None:
+        imported_names = {
+            name.strip()
+            for name in import_match.group("names").split(",")
+            if name.strip()
+        }
+    required_bindings = {"WasmReadonlySerialDirective", "WasmReadonlySerialDiscovery"}
+    if imported_names != required_bindings:
+        errors.append("adapter must statically import only the exact generated Rust trust types")
+    if len(re.findall(r"new\s+WasmReadonlySerialDiscovery\s*\(\s*\)", adapter)) != 1:
+        errors.append("discover must internally create exactly one genuine Rust discovery")
+    if len(re.findall(r"instanceof\s+WasmReadonlySerialDirective\b", adapter)) != 1:
+        errors.append("directives must be checked against the exact generated Rust class")
+    if len(re.findall(r"async\s+discover\s*\(\s*\)", adapter)) != 1:
+        errors.append("public discover must accept no caller-supplied authority")
+
+    substitutable_trust = (
+        r"\brustDirectiveType\b",
+        r"\b(?:setRustBindings|bindings|rustBindings|bindingFactory|bindingsFactory|discoveryFactory|directiveFactory)\b",
+        r"\b(?:validator|trustCallback|directiveType|discoveryType)\b",
+        r"\b(?:directiveConstructor|discoveryConstructor)\b",
+        r"\bdiscover\s*\(\s*[A-Za-z_$]",
+    )
+    for pattern in substitutable_trust:
+        if re.search(pattern, adapter):
+            errors.append("adapter exposes caller-substitutable Rust trust authority")
+
+    if declaration is not None:
+        if not re.search(
+            r"constructor\s*\(\s*options\?\s*:\s*\{\s*serial\?\s*:\s*object\s*;\s*timeoutMs\?\s*:\s*number\s*\}\s*\)",
+            declaration,
+        ):
+            errors.append("public constructor may expose only serial and bounded timing options")
+        if not re.search(r"\bdiscover\s*\(\s*\)\s*:", declaration):
+            errors.append("public declaration must expose zero-argument discover()")
+        for pattern in substitutable_trust:
+            if re.search(pattern, declaration):
+                errors.append("declaration exposes caller-substitutable Rust trust authority")
 
     forbidden_adapter = (
         (r"\bgetPorts\s*\(", "automatic/granted port enumeration"),

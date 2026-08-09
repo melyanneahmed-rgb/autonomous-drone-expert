@@ -67,6 +67,80 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
             del sources[required]
             self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
 
+    def test_substitutable_rust_trust_inputs_are_rejected(self) -> None:
+        adapter = str(check_webserial_boundary.ADAPTER)
+        for marker in (
+            "const rustDirectiveType = FakeDirective;",
+            "function setRustBindings(value) { return value; }",
+            "const rustBindings = caller.bindings;",
+            "const bindings = caller.bindings;",
+            "const bindingFactory = caller.factory;",
+            "const bindingsFactory = caller.factory;",
+            "const discoveryFactory = caller.factory;",
+            "const directiveFactory = caller.factory;",
+            "const validator = caller.validator;",
+            "const trustCallback = caller.callback;",
+            "const directiveType = caller.type;",
+            "const discoveryType = caller.type;",
+            "const directiveConstructor = caller.type;",
+            "const discoveryConstructor = caller.type;",
+            "async discover(discovery) {}",
+        ):
+            self.rejected(adapter, marker)
+
+    def test_generated_binding_import_is_exact_and_non_replaceable(self) -> None:
+        sources = copy.deepcopy(self.sources)
+        adapter = check_webserial_boundary.ADAPTER
+        sources[adapter] = sources[adapter].replace(
+            'from "/wasm/ade_web_readonly_serial_wasm_bridge.js"',
+            'from "/wasm/caller-selected-bindings.js"',
+        )
+        self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
+
+        sources = copy.deepcopy(self.sources)
+        sources[adapter] = sources[adapter].replace(
+            "WasmReadonlySerialDirective,",
+            "WasmReadonlySerialDirective as CallerDirective,",
+        )
+        self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
+
+        sources = copy.deepcopy(self.sources)
+        sources[adapter] = sources[adapter].replace(
+            "const discovery = new WasmReadonlySerialDiscovery();",
+            "const discovery = this.discoveryFactory();",
+        )
+        self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
+
+        sources = copy.deepcopy(self.sources)
+        sources[adapter] = sources[adapter].replace(
+            "directive instanceof WasmReadonlySerialDirective",
+            "directive instanceof this.directiveType",
+        )
+        self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
+
+    def test_public_declaration_cannot_accept_discovery_or_trust_types(self) -> None:
+        sources = copy.deepcopy(self.sources)
+        declaration = check_webserial_boundary.DECLARATION
+        sources[declaration] = sources[declaration].replace(
+            "discover(): Promise<ReadonlyDiscoveryResult>",
+            "discover(discovery: object): Promise<ReadonlyDiscoveryResult>",
+        )
+        self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
+
+        sources = copy.deepcopy(self.sources)
+        sources[declaration] = sources[declaration].replace(
+            "timeoutMs?: number",
+            "timeoutMs?: number; bindings?: object",
+        )
+        self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
+
+        for marker in (
+            "rustDirectiveType: Function",
+            "bindingsFactory: Function",
+            "validator: Function",
+        ):
+            self.rejected(str(declaration), marker)
+
 
 if __name__ == "__main__":
     unittest.main()

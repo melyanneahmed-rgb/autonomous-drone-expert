@@ -37,12 +37,31 @@ test("product surface keeps storage and read-only serial authority in designated
   assert.match(fs.readFileSync(adapter, "utf8"), /globalThis\.indexedDB/);
 
   const serialAdapter = path.join(webRoot, "src", "transport", "webserial-readonly-host.mjs");
+  const serialDeclaration = path.join(
+    webRoot,
+    "src",
+    "transport",
+    "webserial-readonly-host.d.mts",
+  );
   const outsideSerialAdapter = files
     .filter((file) => file !== serialAdapter)
     .map((file) => fs.readFileSync(file, "utf8"))
     .join("\n");
   assert.doesNotMatch(outsideSerialAdapter, /navigator\s*\?*\.\s*serial|\brequestPort\b/);
-  assert.match(fs.readFileSync(serialAdapter, "utf8"), /globalThis\.navigator\?\.serial/);
+  const serialSource = fs.readFileSync(serialAdapter, "utf8");
+  const serialTypes = fs.readFileSync(serialDeclaration, "utf8");
+  assert.match(serialSource, /globalThis\.navigator\?\.serial/);
+  assert.match(serialSource, /from "\/wasm\/ade_web_readonly_serial_wasm_bridge\.js"/);
+  assert.match(serialSource, /new WasmReadonlySerialDiscovery\(\)/);
+  assert.match(serialSource, /instanceof WasmReadonlySerialDirective/);
+  assert.match(serialSource, /async discover\(\)/);
+  assert.doesNotMatch(
+    serialSource,
+    /rustDirectiveType|setRustBindings|\bbindings\b|bindingFactory|discoveryFactory|directiveFactory|trustCallback/,
+  );
+  assert.match(serialTypes, /constructor\(options\?: \{ serial\?: object; timeoutMs\?: number \}\)/);
+  assert.match(serialTypes, /discover\(\): Promise<ReadonlyDiscoveryResult>/);
+  assert.doesNotMatch(serialTypes, /rustDirectiveType|discover\(discovery|\bbindings\b|bindingFactory|validator/);
 });
 
 test("the only network primitive is the guarded same-origin service worker fetch", () => {
