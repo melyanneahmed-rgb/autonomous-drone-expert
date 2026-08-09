@@ -23,6 +23,7 @@ on:
       - continuation/m1-acceptance-hardening
       - feat/m2-web-dependency-policy
       - feat/webapp-approved-ui-v3
+      - feat/m2-web-indexeddb-journal
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -64,6 +65,10 @@ jobs:
       - name: Source, authority, PWA and build contracts
         working-directory: web
         run: npx --yes npm@11.13.0 test
+
+      - name: Real browser IndexedDB journal CAS smoke
+        working-directory: web
+        run: node --experimental-websocket tests/indexeddb-browser-smoke.mjs
 
       - name: Production build
         working-directory: web
