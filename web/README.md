@@ -1,9 +1,10 @@
 # `web/` — canonical Web/PWA product package
 
-This is the only approved root for the Web/PWA product package. No UI source, package
-manifest or dependency lock is integrated in this policy-only change.
+This is the only approved root for the Web/PWA product package. Its exact npm 11.13.0
+manifest and lock are machine-governed by `policy/web-dependencies.json`; dependency or
+lock changes require a fresh audit and explicit digest update.
 
-The next separately reviewed source-integration change may create this layout:
+The approved UI source-integration gate provides this layout:
 
 ```text
 web/
@@ -16,9 +17,8 @@ web/
 └── vite.config.ts
 ```
 
-`package.json` and `package-lock.json` must arrive together. Before either is accepted,
-the exact lockfile SHA-256 must be recorded in `policy/web-dependencies.json` after a fresh
-transitive, license, install-script, native-binary and vulnerability audit. The governing
+`package.json` and `package-lock.json` arrived together after the complete closure, source,
+integrity, license, install-script, native-binary and vulnerability review. The governing
 package manager is `npm@11.13.0`; pnpm, Yarn, Bun, Deno, nested workspaces and packages
 outside `web/` are rejected by `scripts/check_web_dependencies.py`.
 
@@ -27,9 +27,11 @@ outside `web/` are rejected by `scripts/check_web_dependencies.py`.
 - TypeScript/React is the Web shell; Rust remains the deterministic product core.
 - UI code consumes product contracts. It does not build protocol frames or own write
   authority.
-- No IndexedDB, Web Serial, WASM binding, hardware or UI implementation is authorized by
-  this gate.
+- No IndexedDB, Web Serial, WASM binding or hardware implementation is authorized by this
+  package lock.
 - Android/APK source, wrappers and dependencies remain deferred and prohibited.
+- The visible USB chooser is intentionally non-functional in this gate: it reports the
+  deferred capability and never contacts a device or claims selection success.
 
 The approved Site v3 is a design/provenance reference, not a package template. Its hosting,
-database, server-component and platform scaffolding must not be copied into this repository.
+database, server-component and platform scaffolding remain prohibited.
