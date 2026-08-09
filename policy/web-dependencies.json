@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_state": "contract-only",
+  "policy_state": "locked",
   "web_root": "web",
   "manifest_name": "@autonomous-drone-expert/web",
   "package_manager": {
@@ -8,7 +8,7 @@
     "version": "11.13.0",
     "lockfile_version": 3
   },
-  "approved_lockfile_sha256": null,
+  "approved_lockfile_sha256": "c3015e9454da094d307975921b8aa2c195a15b9dffe0498a9c758b57d922c05d",
   "direct_dependencies": {
     "production": {
       "react": {
@@ -44,9 +44,9 @@
         "reason": "Strict static checking for the approved TypeScript source."
       },
       "vite": {
-        "version": "8.0.13",
+        "version": "8.2.1",
         "license": "MIT",
-        "reason": "Development server and deterministic static production build; no browser runtime code."
+        "reason": "Fresh-audited replacement for rejected Vite 8.0.13; development server and deterministic static production build only."
       }
     }
   },
@@ -54,6 +54,7 @@
     "build": "tsc --noEmit && vite build",
     "dev": "vite",
     "preview": "vite preview",
+    "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "allowed_registry_hosts": [
@@ -79,14 +80,14 @@
   "allowed_optional_android_prebuilts": [
     {
       "name": "@rolldown/binding-android-arm64",
-      "version": "1.0.1",
+      "version": "1.2.3",
       "require_dev": true,
       "require_optional": true,
       "reason": "Audited optional cross-platform Rolldown build binary; not an Android product dependency."
     },
     {
       "name": "lightningcss-android-arm64",
-      "version": "1.32.0",
+      "version": "1.33.0",
       "require_dev": true,
       "require_optional": true,
       "reason": "Audited optional cross-platform CSS build binary; not an Android product dependency."

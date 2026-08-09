@@ -107,6 +107,7 @@ class WebDependencyGateTests(unittest.TestCase):
         }
 
     def _integrated_fixture(self, lock_mutator=None) -> tuple[dict, dict]:
+        self.policy["policy_state"] = "locked"
         manifest = self._manifest()
         lock = self._lock(manifest)
         if lock_mutator is not None:
@@ -128,6 +129,9 @@ class WebDependencyGateTests(unittest.TestCase):
     # PASS cases
 
     def test_contract_only_repository_passes_without_manifest_or_lock(self) -> None:
+        self.policy["policy_state"] = "contract-only"
+        self.policy["approved_lockfile_sha256"] = None
+        self._write_policy()
         check_web_dependencies.check_repository(self.root)
 
     def test_exact_manifest_and_approved_registry_lock_pass(self) -> None:
@@ -148,7 +152,7 @@ class WebDependencyGateTests(unittest.TestCase):
             lock["packages"]["node_modules/@rolldown/binding-android-arm64"] = (
                 self._registry_entry(
                     "@rolldown/binding-android-arm64",
-                    "1.0.1",
+                    "1.2.3",
                     "MIT",
                     dev=True,
                     optional=True,
@@ -189,7 +193,33 @@ class WebDependencyGateTests(unittest.TestCase):
     def test_approved_digest_without_web_package_is_rejected(self) -> None:
         self.policy["approved_lockfile_sha256"] = "a" * 64
         self._write_policy()
-        self.assert_rejected("digest exists but the Web package is absent")
+        self.assert_rejected("locked state requires the Web package and lock")
+
+    def test_contract_only_rejects_web_package_even_with_matching_pair(self) -> None:
+        self.policy["policy_state"] = "contract-only"
+        self.policy["approved_lockfile_sha256"] = None
+        manifest = self._manifest()
+        self._write_json(self.root / "web" / "package.json", manifest)
+        self._write_json(self.root / "web" / "package-lock.json", self._lock(manifest))
+        self._write_policy()
+        self.assert_rejected("contract-only state requires")
+
+    def test_contract_only_rejects_non_null_digest(self) -> None:
+        self.policy["policy_state"] = "contract-only"
+        self.policy["approved_lockfile_sha256"] = "a" * 64
+        self._write_policy()
+        self.assert_rejected("contract-only state requires a null")
+
+    def test_locked_rejects_null_digest(self) -> None:
+        self.policy["policy_state"] = "locked"
+        self.policy["approved_lockfile_sha256"] = None
+        self._write_policy()
+        self.assert_rejected("locked state requires a non-null")
+
+    def test_unknown_policy_state_fails_closed(self) -> None:
+        self.policy["policy_state"] = "reviewed-ish"
+        self._write_policy()
+        self.assert_rejected("unsupported Web policy_state")
 
     # Manifest rejection
 
@@ -354,7 +384,7 @@ class WebDependencyGateTests(unittest.TestCase):
         def mutate(lock: dict) -> None:
             lock["packages"]["node_modules/lightningcss-android-arm64"] = (
                 self._registry_entry(
-                    "lightningcss-android-arm64", "1.32.0", "MPL-2.0", dev=True
+                    "lightningcss-android-arm64", "1.33.0", "MPL-2.0", dev=True
                 )
             )
 

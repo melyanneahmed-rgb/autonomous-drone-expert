@@ -6,10 +6,9 @@ no Web dependency by implication: the direct package, exact version, dependency 
 package manager, scripts, lockfile digest and every locked source must all satisfy the
 audited contract in ``policy/web-dependencies.json``.
 
-The current repository is in a contract-only state. A future Web source integration must
-add ``web/package.json`` and ``web/package-lock.json`` together and replace the null
-approved lock digest with the SHA-256 of the reviewed lockfile. Until then the absence of
-both files is valid and any partial or unaudited integration fails closed.
+The policy has exactly two states. ``contract-only`` requires the Web package and lock to
+be absent and the approved digest to be null. ``locked`` requires both files and an exact
+non-null SHA-256. Unknown or internally inconsistent states fail closed.
 """
 
 from __future__ import annotations
@@ -110,8 +109,9 @@ def load_policy(root: Path) -> dict:
     policy = read_json(root / POLICY_PATH)
     if policy.get("schema_version") != 1:
         raise GateError("unsupported Web dependency policy schema")
-    if policy.get("policy_state") != "contract-only":
-        raise GateError("Web policy_state must remain 'contract-only' until source integration")
+    policy_state = policy.get("policy_state")
+    if policy_state not in {"contract-only", "locked"}:
+        raise GateError(f"unsupported Web policy_state: {policy_state!r}")
     web_root = policy.get("web_root")
     if web_root != "web" or Path(web_root).is_absolute() or ".." in Path(web_root).parts:
         raise GateError("policy web_root must be the repository-local 'web' directory")
@@ -146,6 +146,10 @@ def load_policy(root: Path) -> dict:
         not isinstance(approved_digest, str) or not HEX_SHA256.fullmatch(approved_digest)
     ):
         raise GateError("approved_lockfile_sha256 must be null or lowercase SHA-256")
+    if policy_state == "contract-only" and approved_digest is not None:
+        raise GateError("contract-only state requires a null lockfile SHA-256")
+    if policy_state == "locked" and approved_digest is None:
+        raise GateError("locked state requires a non-null lockfile SHA-256")
 
     _require_dict(policy.get("allowed_root_scripts"), "allowed_root_scripts")
     _require_list(policy.get("allowed_registry_hosts"), "allowed_registry_hosts")
@@ -369,10 +373,13 @@ def check_repository(root: Path = ROOT) -> None:
         raise GateError("web package paths must not be symbolic links")
     if manifest_path.exists() != lock_path.exists():
         raise GateError("web/package.json and web/package-lock.json must be added together")
-    if not manifest_path.exists():
-        if policy["approved_lockfile_sha256"] is not None:
-            raise GateError("approved lock digest exists but the Web package is absent")
+    has_package = manifest_path.exists()
+    if policy["policy_state"] == "contract-only":
+        if has_package:
+            raise GateError("contract-only state requires the Web package and lock to be absent")
         return
+    if not has_package:
+        raise GateError("locked state requires the Web package and lock")
     manifest = read_json(manifest_path)
     validate_manifest(manifest, policy)
     lock = read_json(lock_path)
@@ -386,7 +393,8 @@ def main() -> int:
         print("WEB DEPENDENCY POLICY GATE FAILED")
         print(f"  - {exc}")
         return 1
-    print("web dependency policy gate passed (audited contract-only state)")
+    state = load_policy(ROOT)["policy_state"]
+    print(f"web dependency policy gate passed (audited {state} state)")
     return 0
 
 

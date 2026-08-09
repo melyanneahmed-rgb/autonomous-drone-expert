@@ -13,3 +13,7 @@
 *.ico binary
 *.pdf binary
 *.zip binary
+
+# The npm lock is an independently audited, SHA-256-pinned artifact. Preserve its exact
+# bytes across platforms so checkout cannot invalidate the approved digest.
+web/package-lock.json -text
