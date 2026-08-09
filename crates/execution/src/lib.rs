@@ -138,6 +138,12 @@ pub enum ExecError {
         /// The unexpected payload length.
         len: usize,
     },
+    /// An identification request is already awaiting its response.
+    IdentificationRequestPending,
+    /// A response arrived without an identification request in flight.
+    NoIdentificationRequestPending,
+    /// The four-command identification sequence has already completed.
+    IdentificationAlreadyComplete,
 }
 
 impl From<TransportError> for ExecError {
@@ -149,6 +155,189 @@ impl From<TransportError> for ExecError {
 impl From<MspError> for ExecError {
     fn from(error: MspError) -> Self {
         ExecError::Payload(error)
+    }
+}
+
+/// One Rust-authorised request from the canonical four-command identification sequence.
+///
+/// The command and frame are created together in Rust. Callers may transmit the bytes but
+/// cannot select or replace the command through this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentificationRequest {
+    command: CommandId,
+    bytes: Vec<u8>,
+}
+
+impl IdentificationRequest {
+    /// The exact command fixed by the current Rust identification state.
+    #[must_use]
+    pub const fn command(&self) -> CommandId {
+        self.command
+    }
+
+    /// The already-framed MSPv1 request bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentificationStage {
+    ApiVersion,
+    FcVariant,
+    FcVersion,
+    BoardInfo,
+    Complete,
+}
+
+impl IdentificationStage {
+    const fn command(self) -> Option<CommandId> {
+        match self {
+            Self::ApiVersion => Some(CommandId::ApiVersion),
+            Self::FcVariant => Some(CommandId::FcVariant),
+            Self::FcVersion => Some(CommandId::FcVersion),
+            Self::BoardInfo => Some(CommandId::BoardInfo),
+            Self::Complete => None,
+        }
+    }
+}
+
+/// Incremental form of the existing canonical identification implementation.
+///
+/// Native Mock/Replay and the browser effect bridge both use this exact state machine. It
+/// owns the four-command order, strict response correlation, typed payload decoders and
+/// `DeviceIdentity` construction. It accepts no approval and has no write operation.
+#[derive(Debug)]
+pub struct ReadonlyIdentification {
+    stage: IdentificationStage,
+    request_pending: bool,
+    correlator: Correlator,
+    api: Option<ApiVersion>,
+    variant: Option<FcVariant>,
+    version: Option<FcVersion>,
+}
+
+impl ReadonlyIdentification {
+    /// Create the canonical sequence in a state that permits read-only I/O.
+    ///
+    /// # Errors
+    /// Refuses states where `NoWrite` traffic is not permitted.
+    pub fn new(state: SessionState) -> Result<Self, ExecError> {
+        let class = WriteCommandClass::NoWrite;
+        if !state.permits_command_class(class) {
+            return Err(ExecError::NotPermittedInState { state, class });
+        }
+        Ok(Self {
+            stage: IdentificationStage::ApiVersion,
+            request_pending: false,
+            correlator: Correlator::new(),
+            api: None,
+            variant: None,
+            version: None,
+        })
+    }
+
+    /// Emit the one request permitted by the current identification state.
+    ///
+    /// # Errors
+    /// Refuses a second in-flight request or use after completion.
+    pub fn next_request(&mut self) -> Result<IdentificationRequest, ExecError> {
+        if self.request_pending {
+            return Err(ExecError::IdentificationRequestPending);
+        }
+        let command = self
+            .stage
+            .command()
+            .ok_or(ExecError::IdentificationAlreadyComplete)?;
+        let bytes = encode_frame(Direction::Request, command, &[])?;
+        self.correlator.on_request(command);
+        self.request_pending = true;
+        Ok(IdentificationRequest { command, bytes })
+    }
+
+    /// Accept exactly one complete response and advance the canonical identity state.
+    ///
+    /// Returns the typed identity only after `BOARD_INFO`; earlier successful responses
+    /// return `None`.
+    ///
+    /// # Errors
+    /// Refuses missing/out-of-order/duplicate/wrong-command/error-direction responses or any
+    /// typed payload decode failure.
+    pub fn accept_response(&mut self, frame: &Frame) -> Result<Option<DeviceIdentity>, ExecError> {
+        if !self.request_pending {
+            return Err(ExecError::NoIdentificationRequestPending);
+        }
+        if matches!(frame.direction, Direction::Request) {
+            return Err(ExecError::ReplyDirectionInvalid);
+        }
+        let expected = self
+            .stage
+            .command()
+            .ok_or(ExecError::IdentificationAlreadyComplete)?;
+        let reply_command = frame
+            .known_command()
+            .ok_or(ExecError::ReplyCommandMismatch {
+                expected: expected.as_u8(),
+                got: frame.command,
+            })?;
+        match self.correlator.on_reply(reply_command) {
+            ReplyClass::Expected => {}
+            other => return Err(ExecError::ReplyMisclassified(other)),
+        }
+        if frame.command != expected.as_u8() {
+            return Err(ExecError::ReplyCommandMismatch {
+                expected: expected.as_u8(),
+                got: frame.command,
+            });
+        }
+        if matches!(frame.direction, Direction::Error) {
+            return Err(ExecError::ErrorReply {
+                command: frame.command,
+            });
+        }
+
+        self.request_pending = false;
+        match self.stage {
+            IdentificationStage::ApiVersion => {
+                self.api = Some(ApiVersion::from_reply(frame)?);
+                self.stage = IdentificationStage::FcVariant;
+                Ok(None)
+            }
+            IdentificationStage::FcVariant => {
+                self.variant = Some(FcVariant::from_reply(frame)?);
+                self.stage = IdentificationStage::FcVersion;
+                Ok(None)
+            }
+            IdentificationStage::FcVersion => {
+                self.version = Some(FcVersion::from_reply(frame)?);
+                self.stage = IdentificationStage::BoardInfo;
+                Ok(None)
+            }
+            IdentificationStage::BoardInfo => {
+                let board = ade_protocol_msp::BoardInfo::from_reply(frame)?;
+                self.stage = IdentificationStage::Complete;
+                Ok(Some(DeviceIdentity::from_parts(
+                    self.api
+                        .take()
+                        .ok_or(ExecError::NoIdentificationRequestPending)?,
+                    self.variant
+                        .take()
+                        .ok_or(ExecError::NoIdentificationRequestPending)?,
+                    self.version
+                        .take()
+                        .ok_or(ExecError::NoIdentificationRequestPending)?,
+                    &board,
+                )))
+            }
+            IdentificationStage::Complete => Err(ExecError::IdentificationAlreadyComplete),
+        }
+    }
+
+    /// Whether all four responses have been accepted.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        matches!(self.stage, IdentificationStage::Complete)
     }
 }
 
@@ -337,18 +526,14 @@ impl Executor {
         transport: &mut T,
         state: SessionState,
     ) -> Result<DeviceIdentity, ExecError> {
-        let api =
-            ApiVersion::from_reply(&self.read(transport, state, ReadOperation::ApiVersion)?)?;
-        let variant =
-            FcVariant::from_reply(&self.read(transport, state, ReadOperation::FcVariant)?)?;
-        let version =
-            FcVersion::from_reply(&self.read(transport, state, ReadOperation::FcVersion)?)?;
-        let board = ade_protocol_msp::BoardInfo::from_reply(&self.read(
-            transport,
-            state,
-            ReadOperation::BoardInfo,
-        )?)?;
-        Ok(DeviceIdentity::from_parts(api, variant, version, &board))
+        let mut identification = ReadonlyIdentification::new(state)?;
+        loop {
+            let request = identification.next_request()?;
+            let reply = decode_frame(&transport.exchange(request.bytes())?)?;
+            if let Some(identity) = identification.accept_response(&reply)? {
+                return Ok(identity);
+            }
+        }
     }
 
     /// Read the full nine-byte beeper snapshot.
@@ -704,5 +889,72 @@ mod tests {
         assert_eq!(&identity.variant.identifier, b"BTFL");
         assert_eq!(identity.version.major, 4);
         assert_eq!(identity.target_name, "SPEEDYBEEF405V4");
+    }
+
+    #[test]
+    fn incremental_and_native_identification_share_order_and_identity() {
+        let mut executor = Executor::new_simulation(ExecutionTarget::Mock).unwrap();
+        let mut transport = mock_transport();
+        let native = executor
+            .identify(&mut transport, SessionState::Identifying)
+            .unwrap();
+
+        let mut incremental = ReadonlyIdentification::new(SessionState::Identifying).unwrap();
+        let mut fc = MockFc::new(snapshot());
+        let mut commands = Vec::new();
+        let stepped = loop {
+            let request = incremental.next_request().unwrap();
+            commands.push(request.command());
+            let reply = decode_frame(&fc.respond(request.bytes()).unwrap()).unwrap();
+            if let Some(identity) = incremental.accept_response(&reply).unwrap() {
+                break identity;
+            }
+        };
+
+        assert_eq!(
+            commands,
+            [
+                CommandId::ApiVersion,
+                CommandId::FcVariant,
+                CommandId::FcVersion,
+                CommandId::BoardInfo,
+            ]
+        );
+        assert_eq!(stepped, native);
+        assert!(incremental.is_complete());
+        assert_eq!(
+            incremental.next_request().unwrap_err(),
+            ExecError::IdentificationAlreadyComplete
+        );
+    }
+
+    #[test]
+    fn incremental_identification_refuses_wrong_state_and_parallel_progress() {
+        assert_eq!(
+            ReadonlyIdentification::new(SessionState::Connecting).unwrap_err(),
+            ExecError::NotPermittedInState {
+                state: SessionState::Connecting,
+                class: WriteCommandClass::NoWrite,
+            }
+        );
+
+        let mut identification = ReadonlyIdentification::new(SessionState::Identifying).unwrap();
+        assert_eq!(
+            identification
+                .accept_response(
+                    &decode_frame(
+                        &encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46],)
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap_err(),
+            ExecError::NoIdentificationRequestPending
+        );
+        identification.next_request().unwrap();
+        assert_eq!(
+            identification.next_request().unwrap_err(),
+            ExecError::IdentificationRequestPending
+        );
     }
 }

@@ -27,6 +27,11 @@ pub const PREAMBLE_M: u8 = b'M';
 pub const MAX_PAYLOAD: usize = u8::MAX as usize;
 /// Bytes of framing overhead around a payload: `$ M dir size cmd … checksum`.
 pub const FRAME_OVERHEAD: usize = 6;
+/// Deliberately small complete-frame limit for the four read-only discovery replies.
+///
+/// The pinned API 1.46 board-info payload is comfortably below this limit. Browser serial
+/// input is nevertheless untrusted and is never allowed to grow an unbounded accumulator.
+pub const MAX_DISCOVERY_RESPONSE_FRAME: usize = 128;
 
 /// The `beeper_off_flags` bit that gates the power-on initialisation beep.
 ///
@@ -132,6 +137,8 @@ impl CommandId {
 pub enum MspError {
     /// A payload longer than [`MAX_PAYLOAD`] cannot be framed in MSPv1.
     PayloadTooLong(usize),
+    /// An incremental discovery response exceeded its explicit complete-frame bound.
+    FrameTooLarge { limit: usize, got: usize },
     /// Fewer bytes than the frame claims (or fewer than the minimum frame).
     Truncated { needed: usize, got: usize },
     /// Trailing bytes after a complete single frame.
@@ -283,6 +290,124 @@ pub fn decode_frame(bytes: &[u8]) -> Result<Frame, MspError> {
         command,
         payload: payload.to_vec(),
     })
+}
+
+/// Progress returned by the Rust-owned incremental MSPv1 response accumulator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResponseProgress {
+    /// The response is structurally valid so far but not yet complete.
+    NeedMore,
+    /// Exactly one complete, checksum-valid response for the expected command.
+    Complete(Frame),
+}
+
+/// Bounded, incremental decoder for one expected MSPv1 discovery response.
+///
+/// Browser `ReadableStream` chunks have no protocol significance. This type owns frame
+/// boundaries, header and direction validation, command correlation, the size bound,
+/// checksum validation, and the refusal of trailing/coalesced bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MspV1ResponseAccumulator {
+    expected_command: CommandId,
+    bytes: Vec<u8>,
+    complete: bool,
+}
+
+impl MspV1ResponseAccumulator {
+    /// Start accumulating exactly one reply for `expected_command`.
+    #[must_use]
+    pub fn new(expected_command: CommandId) -> Self {
+        Self {
+            expected_command,
+            bytes: Vec::new(),
+            complete: false,
+        }
+    }
+
+    /// Push one arbitrary serial chunk.
+    ///
+    /// # Errors
+    /// Refuses bad/oversized headers, request-direction frames, wrong commands, bad checksums,
+    /// bytes following a completed frame, and coalesced/trailing frame data.
+    pub fn push(&mut self, chunk: &[u8]) -> Result<ResponseProgress, MspError> {
+        if self.complete {
+            return Err(MspError::TrailingBytes {
+                frame_len: self.bytes.len(),
+                got: self.bytes.len().saturating_add(chunk.len()),
+            });
+        }
+        if self.bytes.len().saturating_add(chunk.len()) > MAX_DISCOVERY_RESPONSE_FRAME {
+            return Err(MspError::FrameTooLarge {
+                limit: MAX_DISCOVERY_RESPONSE_FRAME,
+                got: self.bytes.len().saturating_add(chunk.len()),
+            });
+        }
+        self.bytes.extend_from_slice(chunk);
+
+        if let Some(&first) = self.bytes.first() {
+            if first != PREAMBLE_DOLLAR {
+                return Err(MspError::BadPreamble);
+            }
+        }
+        if self.bytes.len() >= 2 && self.bytes[1] != PREAMBLE_M {
+            return Err(MspError::BadPreamble);
+        }
+        if self.bytes.len() >= 3 {
+            let direction = Direction::from_byte(self.bytes[2])?;
+            if !matches!(direction, Direction::Reply | Direction::Error) {
+                return Err(MspError::WrongDirection);
+            }
+        }
+        if self.bytes.len() >= 5 && self.bytes[4] != self.expected_command.as_u8() {
+            return Err(MspError::WrongCommand {
+                expected: self.expected_command.as_u8(),
+                found: self.bytes[4],
+            });
+        }
+        if self.bytes.len() < 4 {
+            return Ok(ResponseProgress::NeedMore);
+        }
+
+        let frame_len = FRAME_OVERHEAD + self.bytes[3] as usize;
+        if frame_len > MAX_DISCOVERY_RESPONSE_FRAME {
+            return Err(MspError::FrameTooLarge {
+                limit: MAX_DISCOVERY_RESPONSE_FRAME,
+                got: frame_len,
+            });
+        }
+        if self.bytes.len() < frame_len {
+            return Ok(ResponseProgress::NeedMore);
+        }
+        if self.bytes.len() > frame_len {
+            return Err(MspError::TrailingBytes {
+                frame_len,
+                got: self.bytes.len(),
+            });
+        }
+
+        let frame = decode_frame(&self.bytes)?;
+        self.complete = true;
+        Ok(ResponseProgress::Complete(frame))
+    }
+
+    /// Refuse an input stream that ended before one complete response arrived.
+    ///
+    /// # Errors
+    /// Returns a structural truncation error when the response is incomplete.
+    pub fn finish(&self) -> Result<(), MspError> {
+        if self.complete {
+            return Ok(());
+        }
+        let needed = if self.bytes.len() >= 4 {
+            FRAME_OVERHEAD + self.bytes[3] as usize
+        } else {
+            FRAME_OVERHEAD
+        };
+        Err(MspError::Truncated {
+            needed,
+            got: self.bytes.len(),
+        })
+    }
 }
 
 /// A bounds-checked forward reader over a payload. Every read verifies remaining length.
@@ -1082,6 +1207,104 @@ mod tests {
         bytes.push(0x00);
         assert!(matches!(
             decode_frame(&bytes),
+            Err(MspError::TrailingBytes { .. })
+        ));
+    }
+
+    #[test]
+    fn incremental_response_accepts_every_fragmentation_shape() {
+        let bytes = reply(CommandId::FcVersion, &[4, 5, 5]);
+
+        let mut one_byte = MspV1ResponseAccumulator::new(CommandId::FcVersion);
+        for (index, byte) in bytes.iter().enumerate() {
+            let progress = one_byte.push(core::slice::from_ref(byte)).unwrap();
+            assert_eq!(
+                matches!(progress, ResponseProgress::Complete(_)),
+                index + 1 == bytes.len()
+            );
+        }
+        one_byte.finish().unwrap();
+
+        for split in 1..bytes.len() {
+            let mut accumulator = MspV1ResponseAccumulator::new(CommandId::FcVersion);
+            assert_eq!(
+                accumulator.push(&bytes[..split]).unwrap(),
+                ResponseProgress::NeedMore
+            );
+            assert!(matches!(
+                accumulator.push(&bytes[split..]).unwrap(),
+                ResponseProgress::Complete(_)
+            ));
+        }
+
+        let mut exact = MspV1ResponseAccumulator::new(CommandId::FcVersion);
+        assert!(matches!(
+            exact.push(&bytes).unwrap(),
+            ResponseProgress::Complete(_)
+        ));
+    }
+
+    #[test]
+    fn incremental_response_refuses_malformed_wrong_or_unbounded_input() {
+        let valid = reply(CommandId::FcVersion, &[4, 5, 5]);
+
+        let mut checksum = valid.clone();
+        *checksum.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            MspV1ResponseAccumulator::new(CommandId::FcVersion).push(&checksum),
+            Err(MspError::BadChecksum { .. })
+        ));
+
+        let request = encode_frame(Direction::Request, CommandId::FcVersion, &[]).unwrap();
+        assert_eq!(
+            MspV1ResponseAccumulator::new(CommandId::FcVersion).push(&request),
+            Err(MspError::WrongDirection)
+        );
+
+        let wrong = reply(CommandId::ApiVersion, &[0, 1, 46]);
+        assert!(matches!(
+            MspV1ResponseAccumulator::new(CommandId::FcVersion).push(&wrong),
+            Err(MspError::WrongCommand { .. })
+        ));
+
+        let oversized = [b'$', b'M', b'>', 123];
+        assert!(matches!(
+            MspV1ResponseAccumulator::new(CommandId::BoardInfo).push(&oversized),
+            Err(MspError::FrameTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn incremental_response_refuses_truncation_and_trailing_or_coalesced_data() {
+        let valid = reply(CommandId::ApiVersion, &[0, 1, 46]);
+        let mut truncated = MspV1ResponseAccumulator::new(CommandId::ApiVersion);
+        assert_eq!(
+            truncated.push(&valid[..valid.len() - 1]).unwrap(),
+            ResponseProgress::NeedMore
+        );
+        assert!(matches!(
+            truncated.finish(),
+            Err(MspError::Truncated { .. })
+        ));
+
+        let mut with_trailing = valid.clone();
+        with_trailing.push(0);
+        assert!(matches!(
+            MspV1ResponseAccumulator::new(CommandId::ApiVersion).push(&with_trailing),
+            Err(MspError::TrailingBytes { .. })
+        ));
+
+        let mut coalesced = valid.clone();
+        coalesced.extend_from_slice(&valid);
+        assert!(matches!(
+            MspV1ResponseAccumulator::new(CommandId::ApiVersion).push(&coalesced),
+            Err(MspError::TrailingBytes { .. })
+        ));
+
+        let mut completed = MspV1ResponseAccumulator::new(CommandId::ApiVersion);
+        completed.push(&valid).unwrap();
+        assert!(matches!(
+            completed.push(&[0]),
             Err(MspError::TrailingBytes { .. })
         ));
     }
