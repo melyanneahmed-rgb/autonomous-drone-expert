@@ -3,9 +3,10 @@
 #
 # Scope note (honesty): these gates cover the M0 policy foundation, the M1 Mock/Replay Rust
 # slice and the M2 product-core crates that are explicitly checked for WebAssembly. Gates
-# for UI interaction, serial/USB/DFU, hardware and release publishing are deliberately
-# absent and are added with those components. M1 line/branch coverage remains fail-closed
-# for the five critical lifecycle files.
+# for UI interaction, USB/DFU, hardware and release publishing are deliberately absent. The
+# serial gate is limited to Web Serial read-only identification with an injected CI device;
+# it makes no physical-hardware claim. M1 line/branch coverage remains fail-closed for the
+# five critical lifecycle files.
 #
 # Action pinning: actions are pinned to an exact release tag. Pinning to a commit SHA
 # could not be completed in the environment that authored this file, because the GitHub
@@ -25,6 +26,7 @@ on:
       - feat/webapp-approved-ui-v3
       - feat/m2-web-indexeddb-journal
       - feat/m2-web-storage-wasm-bridge
+      - feat/m2-webserial-readonly-discovery
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -77,6 +79,9 @@ jobs:
       - name: Build the storage-only Rust bridge at MSRV
         run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
 
+      - name: Build the read-only Web Serial Rust bridge at MSRV
+        run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
+
       - name: Generate Web glue with the isolated pinned tool
         run: |
           mkdir -p target/storage-wasm-web
@@ -87,6 +92,17 @@ jobs:
       - name: Real Chrome Rust WASM and IndexedDB storage gate
         working-directory: web
         run: node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web
+
+      - name: Generate read-only Web Serial Web glue with the isolated pinned tool
+        run: |
+          mkdir -p target/webserial-wasm-web
+          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+            target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            target/webserial-wasm-web
+
+      - name: Real Chrome Rust WASM and Web Serial read-only gate
+        working-directory: web
+        run: node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web
 
       - name: Production build
         working-directory: web
@@ -115,6 +131,9 @@ jobs:
 
       - name: Audited Web dependency and repository gate
         run: python3 scripts/check_web_dependencies.py
+
+      - name: Web Serial read-only authority gate
+        run: python3 scripts/check_webserial_boundary.py
 
       - name: Unsafe-Rust gate
         run: python3 scripts/check_forbid_unsafe.py
@@ -220,9 +239,9 @@ jobs:
 
   rust-wasm-core:
     # M2 does not claim that the whole native M1 harness is a browser application. This job
-    # proves the protocol-independent planning, journal, host-effect and core API boundary
-    # compile for the browser target without native filesystem, serial, IndexedDB or Web
-    # Serial dependencies. The native journal adapter is deliberately absent from this list.
+    # proves the protocol-independent planning, journal, host-effect, core API and dedicated
+    # read-only serial facade compile for the browser target without native filesystem or
+    # browser API crates. The native journal adapter is deliberately absent from this list.
     name: rust-wasm-core
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -240,10 +259,11 @@ jobs:
           cargo check --target wasm32-unknown-unknown -p ade-runtime-ports
           cargo check --target wasm32-unknown-unknown -p ade-core-api
           cargo check --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
+          cargo check --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
 
   cargo-deny:
-    # Supply-chain gate for ADR-0009 as narrowed by ADR-0012. The product graph admits only
-    # wasm-bindgen 0.2.127 at its exact bridge location. The separate build-tool graph admits
+    # Supply-chain gate for ADR-0009 as narrowed by ADR-0012/ADR-0013. The product graph admits
+    # only wasm-bindgen 0.2.127 at two exact bridge locations. The separate build-tool graph admits
     # only cli-support 0.2.127 and scopes Zlib to foldhash 0.2.0. cargo-deny is required for
     # both graphs -- never advisory-only and never continue-on-error.
     name: cargo-deny
