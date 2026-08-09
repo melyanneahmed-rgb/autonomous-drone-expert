@@ -6,6 +6,7 @@ export type StorageDirective = {
   readonly key: string;
   readonly expectedRevision: string | undefined;
   readonly bytes: Uint8Array;
+  free?(): void;
 };
 
 export interface RustJournalBridge {

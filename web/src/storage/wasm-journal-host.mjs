@@ -74,16 +74,20 @@ export class WasmJournalHost {
     if (typeof directive !== "object" || directive === null) {
       refuse("INVALID_STORAGE_DIRECTIVE");
     }
-    const requestId = requireRequestId(directive.requestId);
-    if (typeof directive.key !== "string") refuse("INVALID_STORAGE_KEY");
+    try {
+      const requestId = requireRequestId(directive.requestId);
+      if (typeof directive.key !== "string") refuse("INVALID_STORAGE_KEY");
 
-    if (directive.kind === "load") {
-      return this.#executeLoad(directive, requestId);
+      if (directive.kind === "load") {
+        return await this.#executeLoad(directive, requestId);
+      }
+      if (directive.kind === "compare-and-swap") {
+        return await this.#executeCompareAndSwap(directive, requestId);
+      }
+      refuse("NON_STORAGE_DIRECTIVE");
+    } finally {
+      if (typeof directive.free === "function") directive.free();
     }
-    if (directive.kind === "compare-and-swap") {
-      return this.#executeCompareAndSwap(directive, requestId);
-    }
-    refuse("NON_STORAGE_DIRECTIVE");
   }
 
   async load() {
