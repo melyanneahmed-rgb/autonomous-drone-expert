@@ -54,6 +54,20 @@ pub enum SessionState {
 }
 
 impl SessionState {
+    /// Whether the canonical four-command identity sequence may start in this state.
+    ///
+    /// Identification is narrower than general [`WriteCommandClass::NoWrite`] traffic. The
+    /// lifecycle identifies on the initial connection, re-identifies while verifying after a
+    /// reboot, and may re-prove identity during recovery. Other read-capable states must not
+    /// restart the identity sequence.
+    #[must_use]
+    pub const fn permits_identification(self) -> bool {
+        matches!(
+            self,
+            SessionState::Identifying | SessionState::Verifying | SessionState::Recovering
+        )
+    }
+
     /// Whether a command of the given [`WriteCommandClass`] may be issued in this state.
     ///
     /// This is the single command-authority contract for the lifecycle. It is deliberately a
@@ -284,6 +298,21 @@ mod tests {
                     "state {state:?} class {class:?}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn identification_authority_matches_the_full_state_matrix() {
+        for state in ALL_STATES {
+            let expected = matches!(
+                state,
+                SessionState::Identifying | SessionState::Verifying | SessionState::Recovering
+            );
+            assert_eq!(
+                state.permits_identification(),
+                expected,
+                "identification authority drifted for {state:?}",
+            );
         }
     }
 

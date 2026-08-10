@@ -1,0 +1,20 @@
+[package]
+name = "ade-web-readonly-serial-wasm-bridge"
+description = "Read-only Web Serial WASM facade for Rust-authorised MSP identification."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ade-core-api = { path = "../core-api" }
+ade-execution = { path = "../execution" }
+ade-facts = { path = "../facts" }
+ade-protocol-msp = { path = "../protocol-msp" }
+ade-runtime-ports = { path = "../runtime-ports" }
+ade-safety = { path = "../safety" }
+ade-session = { path = "../session" }
+wasm-bindgen = { version = "=0.2.127", default-features = false, features = ["std"] }

@@ -22,9 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Dependency policy (ADR-0009, narrowed by ADR-0012). First-party path dependencies onto
 # actual members of this workspace remain the default and all historical checks remain in
-# force. ADR-0012 admits exactly two audited crates, in exactly one manifest and dependency
-# class each. The declaration shape is part of the allowlist: aliases, feature drift, version
-# drift, table drift, or moving either dependency to another manifest fails closed.
+# force. ADR-0012 and ADR-0013 admit exactly three audited declarations, in exact manifests
+# and dependency classes. The declaration shape is part of the allowlist: aliases, feature
+# drift, version drift, table drift, or moving a dependency fails closed.
 #
 # "Actual member" is decided by Cargo itself via `cargo metadata` (below), so that
 # `workspace.exclude` is honoured -- a `workspace.members` glob match is NOT membership.
@@ -34,6 +34,15 @@ ALLOWED_REMOTES = {"origin"}
 AUDITED_REGISTRY_DEPENDENCIES = {
     (
         PurePosixPath("crates/web-storage-wasm-bridge/Cargo.toml"),
+        "dependencies",
+        "wasm-bindgen",
+    ): {
+        "version": "=0.2.127",
+        "default-features": False,
+        "features": ["std"],
+    },
+    (
+        PurePosixPath("crates/web-readonly-serial-wasm-bridge/Cargo.toml"),
         "dependencies",
         "wasm-bindgen",
     ): {
@@ -249,7 +258,7 @@ def classify_dependency(
     The normal accepted form is a path dependency onto a crate that is an ACTUAL member of
     this workspace (per `cargo metadata`, so `workspace.exclude` is honoured), whose real
     package name matches the declaration (allowing an explicit ``package = "…"`` rename).
-    ADR-0012 additionally permits the exact declarations in
+    ADR-0012 and ADR-0013 additionally permit the exact declarations in
     ``AUDITED_REGISTRY_DEPENDENCIES``. Registry versions, git sources, wildcards, hybrids,
     workspace-inherited deps, escaping paths and non-member paths are otherwise rejected.
     Path containment is checked structurally (resolve + relative_to), never by string prefix.
@@ -269,11 +278,11 @@ def classify_dependency(
         if expected_registry_spec is None:
             return (
                 f"{prefix} is an unaudited registry dependency. Only the exact "
-                "manifest/table/name/spec shapes in ADR-0012 are permitted."
+                "manifest/table/name/spec shapes in ADR-0012/ADR-0013 are permitted."
             )
         if spec != expected_registry_spec:
             return (
-                f"{prefix} drifts from its audited ADR-0012 declaration "
+                f"{prefix} drifts from its audited ADR-0012/ADR-0013 declaration "
                 f"(expected {expected_registry_spec!r}, found {spec!r})."
             )
         return None

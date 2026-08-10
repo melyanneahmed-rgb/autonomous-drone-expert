@@ -149,6 +149,20 @@ name = "ade-transport-dfu"
 version = "0.0.0"
 
 [[package]]
+name = "ade-web-readonly-serial-wasm-bridge"
+version = "0.0.0"
+dependencies = [
+ "ade-core-api",
+ "ade-execution",
+ "ade-facts",
+ "ade-protocol-msp",
+ "ade-runtime-ports",
+ "ade-safety",
+ "ade-session",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "ade-web-storage-wasm-bridge"
 version = "0.0.0"
 dependencies = [
