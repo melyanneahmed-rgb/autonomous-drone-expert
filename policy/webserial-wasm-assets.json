@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "classification": "derived-build-output-no-new-authority",
+  "source": {
+    "accepted_main_commit": "8ef20be74a34912de53030d28d29b5e4108ddd08",
+    "package": "ade-web-readonly-serial-wasm-bridge",
+    "manifest": {
+      "path": "crates/web-readonly-serial-wasm-bridge/Cargo.toml",
+      "git_blob_sha1": "972e14c29b36bdfe0bbe9c38638ba3d3692a574d",
+      "sha256": "5290337dadb331bc4e25020030a27e41f43b3c457319010ab60dd7ce85c1e608"
+    },
+    "rust_source": {
+      "path": "crates/web-readonly-serial-wasm-bridge/src/lib.rs",
+      "git_blob_sha1": "d01646cdf9ea0bb4016a717e3ca9f97d12d8a2a6",
+      "sha256": "01528568bf5cfccf7eeba580f0e1f52e73d22fc00b2c72010dc1b23c1bf59db0"
+    },
+    "build_toolchain": "1.85.0",
+    "target": "wasm32-unknown-unknown",
+    "input_wasm_sha256": "65e46ddb363b2cd1435966fd9ba90d682ae7012bf19663c9755b4c5821219bb8"
+  },
+  "generator": {
+    "package": "wasm-bindgen-cli-support",
+    "version": "0.2.127",
+    "isolated_manifest": {
+      "path": "tools/wasm-bindgen-cli-support/Cargo.toml",
+      "git_blob_sha1": "cb15983a2a4860f6c3a5f5ceb92334f2248c5a9d",
+      "sha256": "01ab37364c7a7d76300743ff1beb339c92f61bd918452e3bfac5103bfe2825bb"
+    },
+    "isolated_lock": {
+      "path": "tools/wasm-bindgen-cli-support/Cargo.lock",
+      "git_blob_sha1": "b5334fac369066735dde55604f0a2fe7ec4260f6",
+      "sha256": "6b13d9e3029e446a9a09a9d7e0db0ad506af89340c484be744b105c67dc3c716"
+    },
+    "toolchain": "1.97.1",
+    "canonical_environment": "github-actions/ubuntu-latest",
+    "canonical_workflow": ".github/workflows/ci.yml",
+    "generation_command": "cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm <temporary-output-directory>"
+  },
+  "outputs": [
+    {
+      "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge.js",
+      "sha256": "d2a92ffcdfdde12b5a3c63c1cfe67190c8602fe3ccddb3a6f3e4d3af04b4d154",
+      "size": 17037
+    },
+    {
+      "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+      "sha256": "0f67aa07b5b6f51264d56d562f09d79721d47a27e8b9c99587d5b8843f11b9f4",
+      "size": 66106
+    }
+  ],
+  "verification": {
+    "script": "scripts/verify_webserial_product_assets.py",
+    "comparison": "byte-for-byte",
+    "required_dist_prefix": "dist/wasm/",
+    "accepted_reference_ci_run": {
+      "run_number": 67,
+      "run_id": 31339235539,
+      "result": "success"
+    }
+  }
+}
