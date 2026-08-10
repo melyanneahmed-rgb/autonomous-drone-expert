@@ -1,5 +1,3 @@
-/* @ts-self-types="./ade_web_readonly_serial_wasm_bridge.d.ts" */
-
 /**
  * One opaque host operation created by the Rust discovery state machine.
  */
@@ -487,9 +485,7 @@ async function __wbg_init(module_or_path) {
         }
     }
 
-    if (module_or_path === undefined) {
-        module_or_path = new URL('ade_web_readonly_serial_wasm_bridge_bg.wasm', import.meta.url);
-    }
+
     const imports = __wbg_get_imports();
 
     if (typeof module_or_path === 'string' || (typeof Request === 'function' && module_or_path instanceof Request) || (typeof URL === 'function' && module_or_path instanceof URL)) {

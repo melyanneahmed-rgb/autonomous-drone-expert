@@ -16,7 +16,7 @@
     },
     "build_toolchain": "1.85.0",
     "target": "wasm32-unknown-unknown",
-    "input_wasm_sha256": "65e46ddb363b2cd1435966fd9ba90d682ae7012bf19663c9755b4c5821219bb8"
+    "input_wasm_sha256": "812a2ea62564cdb958f54311afc3a8f9e7d5889b468977abea36e46531ccfc03"
   },
   "generator": {
     "package": "wasm-bindgen-cli-support",
@@ -39,23 +39,24 @@
   "outputs": [
     {
       "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge.js",
-      "sha256": "d2a92ffcdfdde12b5a3c63c1cfe67190c8602fe3ccddb3a6f3e4d3af04b4d154",
-      "size": 17037
+      "sha256": "68e2ee99c2c1a77e2d35b495672bef6f8896a384a9c4f79e26599d14ec9fbe6c",
+      "size": 16827
     },
     {
       "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
-      "sha256": "0f67aa07b5b6f51264d56d562f09d79721d47a27e8b9c99587d5b8843f11b9f4",
-      "size": 66106
+      "sha256": "c497cdab06207e6d034f0383f0f4e704c18bfbde0a20f5daf6eb8cd09615eaf7",
+      "size": 66102
     }
   ],
   "verification": {
     "script": "scripts/verify_webserial_product_assets.py",
     "comparison": "byte-for-byte",
     "required_dist_prefix": "dist/wasm/",
-    "accepted_reference_ci_run": {
-      "run_number": 67,
-      "run_id": 31339235539,
-      "result": "success"
+    "canonical_capture_ci_run": {
+      "run_number": 75,
+      "run_id": 31429570714,
+      "job_id": 93589413209,
+      "result": "trusted-linux-byte-capture"
     }
   }
 }
