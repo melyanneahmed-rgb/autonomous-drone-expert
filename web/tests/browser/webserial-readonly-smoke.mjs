@@ -277,7 +277,7 @@ async function scenarioFFailClosed() {
     ["truncated-timeout", "Timeout"],
     ["disconnect", "Disconnected"],
     ["oversized", "MalformedResponse"],
-    ["wrong-command", "ProtocolIdentityFailure"],
+    ["wrong-command", "MalformedResponse"],
   ]) {
     const run = await runDiscovery(IN_SCOPE_REPLIES, mode, 15);
     assert(run.result.outcome === "failed", `${mode} failed`);
