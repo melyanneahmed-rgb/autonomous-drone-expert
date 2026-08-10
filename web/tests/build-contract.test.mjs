@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,6 +8,11 @@ import { fileURLToPath } from "node:url";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const dist = path.join(webRoot, "dist");
+const provenance = JSON.parse(
+  fs.readFileSync(path.join(webRoot, "..", "policy", "webserial-wasm-assets.json"), "utf8"),
+);
+
+const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 function filesBelow(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -37,6 +43,16 @@ test("production build contains only the approved static PWA surface", () => {
   assert.equal(relative.filter((file) => file.endsWith(".html")).length, 1);
   assert.ok(relative.some((file) => file.endsWith(".js")), "built JavaScript missing");
   assert.ok(relative.some((file) => file.endsWith(".css")), "built CSS missing");
+
+  const wasmFiles = relative.filter((file) => file.startsWith("wasm/"));
+  assert.deepEqual(wasmFiles.sort(), [
+    "wasm/ade_web_readonly_serial_wasm_bridge.js",
+    "wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+  ]);
+  for (const output of provenance.outputs) {
+    const relativeOutput = output.path.replace("web/public/", "");
+    assert.equal(sha256(path.join(dist, relativeOutput)), output.sha256, relativeOutput);
+  }
 
   const html = fs.readFileSync(path.join(dist, "index.html"), "utf8");
   assert.doesNotMatch(html, /(?:src|href)=["']https?:\/\//i);

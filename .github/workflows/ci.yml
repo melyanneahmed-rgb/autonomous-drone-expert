@@ -3,7 +3,7 @@
 #
 # Scope note (honesty): these gates cover the M0 policy foundation, the M1 Mock/Replay Rust
 # slice and the M2 product-core crates that are explicitly checked for WebAssembly. Gates
-# for UI interaction, USB/DFU, hardware and release publishing are deliberately absent. The
+# for USB/DFU, hardware and release publishing are deliberately absent. The production UI
 # serial gate is limited to Web Serial read-only identification with an injected CI device;
 # it makes no physical-hardware claim. M1 line/branch coverage remains fail-closed for the
 # five critical lifecycle files.
@@ -27,6 +27,7 @@ on:
       - feat/m2-web-indexeddb-journal
       - feat/m2-web-storage-wasm-bridge
       - feat/m2-webserial-readonly-discovery
+      - feat/m2-webapp-readonly-fc-connect
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -76,6 +77,9 @@ jobs:
       - name: Install product MSRV with browser target
         run: rustup toolchain install 1.85.0 --profile minimal --target wasm32-unknown-unknown
 
+      - name: Install pinned isolated generator toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+
       - name: Build the storage-only Rust bridge at MSRV
         run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
 
@@ -95,18 +99,28 @@ jobs:
 
       - name: Generate read-only Web Serial Web glue with the isolated pinned tool
         run: |
-          mkdir -p target/webserial-wasm-web
-          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+          mkdir -p target/webserial-wasm-product-regenerated
+          cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
             target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
-            target/webserial-wasm-web
+            target/webserial-wasm-product-regenerated
+
+      - name: Prove committed product WASM assets reproduce byte-for-byte
+        run: |
+          python3 scripts/verify_webserial_product_assets.py \
+            --input-wasm target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            --generated-dir target/webserial-wasm-product-regenerated
 
       - name: Real Chrome Rust WASM and Web Serial read-only gate
         working-directory: web
-        run: node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web
+        run: node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-product-regenerated
 
       - name: Production build
         working-directory: web
         run: npx --yes npm@11.13.0 run build
+
+      - name: Real Chrome production Smart Configurator read-only connection gate
+        working-directory: web
+        run: node --experimental-websocket tests/webapp-readonly-fc-browser-smoke.mjs
 
       - name: Security audit
         working-directory: web
@@ -134,6 +148,9 @@ jobs:
 
       - name: Web Serial read-only authority gate
         run: python3 scripts/check_webserial_boundary.py
+
+      - name: Checked-in Web Serial product asset provenance gate
+        run: python3 scripts/verify_webserial_product_assets.py
 
       - name: Unsafe-Rust gate
         run: python3 scripts/check_forbid_unsafe.py

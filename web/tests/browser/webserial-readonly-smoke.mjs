@@ -87,6 +87,8 @@ class TestPort {
         const bad = Uint8Array.from(reply);
         bad[bad.length - 1] ^= 1;
         this.queue.push(bad);
+      } else if (this.mode === "wrong-command" && this.writes.length === 1) {
+        this.queue.push(Uint8Array.from([36, 77, 62, 3, 2, 0, 1, 46, 46]));
       } else if (this.mode === "oversized" && this.writes.length === 1) {
         this.queue.push(Uint8Array.from([36, 77, 62, 123]));
       } else if (this.mode === "truncated-timeout" && this.writes.length === 1) {
@@ -147,14 +149,19 @@ async function scenarioAUnavailable() {
 }
 
 async function scenarioBCancelled() {
-  mark("B-selection-cancelled");
-  const error = new Error("owner cancelled");
-  error.name = "NotFoundError";
-  const serial = new TestSerial(null, error);
-  const host = hostFor(serial);
-  const selected = await host.selectPortFromUserGesture();
-  assert(!selected.ok && selected.failure === "Cancelled", "stable cancelled result");
-  assert(serial.requestCount === 1, "one explicit requestPort call");
+  mark("B-selection-failures");
+  for (const [name, expected] of [
+    ["NotFoundError", "Cancelled"],
+    ["NotAllowedError", "PermissionDenied"],
+  ]) {
+    const error = new Error(expected);
+    error.name = name;
+    const serial = new TestSerial(null, error);
+    const host = hostFor(serial);
+    const selected = await host.selectPortFromUserGesture();
+    assert(!selected.ok && selected.failure === expected, `stable ${expected} result`);
+    assert(serial.requestCount === 1, `one explicit requestPort call for ${expected}`);
+  }
 }
 
 async function scenarioCSuccessAndGCleanup() {
@@ -270,6 +277,7 @@ async function scenarioFFailClosed() {
     ["truncated-timeout", "Timeout"],
     ["disconnect", "Disconnected"],
     ["oversized", "MalformedResponse"],
+    ["wrong-command", "ProtocolIdentityFailure"],
   ]) {
     const run = await runDiscovery(IN_SCOPE_REPLIES, mode, 15);
     assert(run.result.outcome === "failed", `${mode} failed`);

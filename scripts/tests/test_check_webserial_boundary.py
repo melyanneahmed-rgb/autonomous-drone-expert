@@ -62,6 +62,9 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
         for required in (
             check_webserial_boundary.ADAPTER,
             check_webserial_boundary.DECLARATION,
+            check_webserial_boundary.FACADE,
+            check_webserial_boundary.FACADE_DECLARATION,
+            check_webserial_boundary.APP,
         ):
             sources = copy.deepcopy(self.sources)
             del sources[required]
@@ -140,6 +143,33 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
             "validator: Function",
         ):
             self.rejected(str(declaration), marker)
+
+    def test_react_cannot_gain_command_payload_permission_or_persistence(self) -> None:
+        for marker in (
+            "navigator.serial.requestPort()",
+            "getPorts()",
+            "getInfo()",
+            "const commandId = 1;",
+            "const payload = bytes;",
+            "WriteApproval",
+            "TransportEffect",
+            "localStorage.setItem('device', value)",
+            "const hardwareObserved = true;",
+        ):
+            self.rejected(str(check_webserial_boundary.APP), marker)
+
+    def test_facade_cannot_replace_host_or_gain_low_level_authority(self) -> None:
+        for marker in (
+            "navigator.serial.requestPort()",
+            "getPorts()",
+            "getInfo()",
+            "const commandId = 1;",
+            "const payload = bytes;",
+            "WriteApproval",
+            "TransportEffect",
+            "localStorage.setItem('device', value)",
+        ):
+            self.rejected(str(check_webserial_boundary.FACADE), marker)
 
 
 if __name__ == "__main__":

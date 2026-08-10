@@ -22,9 +22,16 @@ test("service worker is same-origin, GET-only, and caches required assets", () =
   assert.match(register, /window\.location\.origin/);
   assert.match(worker, /request\.method !== "GET"/);
   assert.match(worker, /url\.origin !== self\.location\.origin/);
-  for (const asset of ["/", "/manifest.webmanifest", "/favicon.svg"]) {
+  for (const asset of [
+    "/",
+    "/manifest.webmanifest",
+    "/favicon.svg",
+    "/wasm/ade_web_readonly_serial_wasm_bridge.js",
+    "/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+  ]) {
     assert.ok(worker.includes(`"${asset}"`), `missing app-shell asset: ${asset}`);
   }
   assert.doesNotMatch(worker, /https?:\/\//i);
   assert.doesNotMatch(worker, /\b(indexedDB|ADEJ|journal|casebook)\b/i);
+  assert.doesNotMatch(worker, /serialNumber|getInfo|usbVendorId|usbProductId|deviceId/i);
 });
