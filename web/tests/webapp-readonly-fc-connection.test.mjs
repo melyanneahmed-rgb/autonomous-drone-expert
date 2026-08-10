@@ -13,8 +13,19 @@ const facadeTypes = read("src/connection/readonly-fc-connection.d.mts");
 const host = read("src/transport/webserial-readonly-host.mjs");
 const hostTypes = read("src/transport/webserial-readonly-host.d.mts");
 const viteConfig = read("vite.config.ts");
+const acceptedBrowser = read("tests/browser/webserial-readonly-smoke.mjs");
 const productionBrowser = read("tests/webapp-readonly-fc-browser-smoke.mjs");
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+function numericFixture(source, declaration) {
+  const fixture = source.match(
+    new RegExp(`const ${declaration} = (\\[[\\s\\S]*?\\])\\.map`),
+  );
+  assert.ok(fixture?.[1], `missing numeric fixture: ${declaration}`);
+  return [...fixture[1].matchAll(/\[[\d,\s]+\]/g)].map((entry) =>
+    JSON.parse(entry[0]),
+  );
+}
 
 test("the accepted production host remains byte-for-byte unchanged", () => {
   assert.equal(sha256(host), "a27c3f885ccff82041f85a7f6febc38ab80a9bac6a985320d4f49f68f0350973");
@@ -88,6 +99,13 @@ test("production browser gate uses a trusted native gesture rather than DOM clic
   assert.match(productionBrowser, /Input\.dispatchKeyEvent/);
   assert.match(productionBrowser, /navigator\.userActivation\?\.isActive === true/);
   assert.doesNotMatch(productionBrowser, /\.click\s*\(/);
+});
+
+test("production App reuses the exact accepted read-only response fixtures", () => {
+  assert.deepEqual(
+    numericFixture(productionBrowser, "inScopeReplies"),
+    numericFixture(acceptedBrowser, "IN_SCOPE_REPLIES"),
+  );
 });
 
 test("UI output and state are privacy bounded and make no hardware claim", () => {
