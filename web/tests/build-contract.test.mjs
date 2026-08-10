@@ -54,6 +54,21 @@ test("production build contains only the approved static PWA surface", () => {
     assert.equal(sha256(path.join(dist, relativeOutput)), output.sha256, relativeOutput);
   }
 
+  const bundledJavaScript = files
+    .filter(
+      (file) =>
+        file.endsWith(".js") &&
+        path.relative(dist, file).replaceAll("\\", "/") !==
+          "wasm/ade_web_readonly_serial_wasm_bridge.js",
+    )
+    .map((file) => fs.readFileSync(file, "utf8"))
+    .join("\n");
+  assert.match(
+    bundledJavaScript,
+    /from\s*["']\/wasm\/ade_web_readonly_serial_wasm_bridge\.js["']/,
+    "production bundle must retain the exact same-origin generated-module import",
+  );
+
   const html = fs.readFileSync(path.join(dist, "index.html"), "utf8");
   assert.doesNotMatch(html, /(?:src|href)=["']https?:\/\//i);
   const text = files

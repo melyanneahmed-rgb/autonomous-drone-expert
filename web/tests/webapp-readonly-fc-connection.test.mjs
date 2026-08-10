@@ -12,6 +12,7 @@ const facade = read("src/connection/readonly-fc-connection.mjs");
 const facadeTypes = read("src/connection/readonly-fc-connection.d.mts");
 const host = read("src/transport/webserial-readonly-host.mjs");
 const hostTypes = read("src/transport/webserial-readonly-host.d.mts");
+const viteConfig = read("vite.config.ts");
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 test("the accepted production host remains byte-for-byte unchanged", () => {
@@ -69,6 +70,17 @@ test("facade exports no command, payload, raw transport, or replaceable host aut
   assert.doesNotMatch(facade, /navigator\s*\.\s*serial|requestPort|getPorts|getInfo/i);
   assert.match(facade, /class PreparedReadonlyFcConnection/);
   assert.doesNotMatch(facade, /export\s+(?:class|\{[^}]*PreparedReadonlyFcConnection)/);
+});
+
+test("Vite externalizes only the byte-locked same-origin generated module", () => {
+  const external = viteConfig.match(/external:\s*\[(?<entries>[^\]]*)\]/s);
+  assert.ok(external?.groups?.entries, "missing bounded Rolldown external list");
+  assert.deepEqual(
+    [...external.groups.entries.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]),
+    ["/wasm/ade_web_readonly_serial_wasm_bridge.js"],
+  );
+  assert.match(viteConfig, /rolldownOptions:\s*\{/);
+  assert.doesNotMatch(external.groups.entries, /\*|RegExp|new\s+URL|https?:/i);
 });
 
 test("UI output and state are privacy bounded and make no hardware claim", () => {
