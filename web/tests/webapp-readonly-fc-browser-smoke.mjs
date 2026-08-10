@@ -212,9 +212,22 @@ async function activateConnectionFromTrustedKeyboardGesture(send, evaluate) {
     return document.activeElement === button;
   })()`);
   if (!focused) throw new Error("PRODUCTION_CONNECTION_BUTTON_NOT_FOCUSABLE");
-  const key = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+  const key = {
+    key: "Enter",
+    code: "Enter",
+    text: "\r",
+    unmodifiedText: "\r",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13,
+  };
   await send("Input.dispatchKeyEvent", { type: "keyDown", ...key });
-  await send("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: key.key,
+    code: key.code,
+    windowsVirtualKeyCode: key.windowsVirtualKeyCode,
+    nativeVirtualKeyCode: key.nativeVirtualKeyCode,
+  });
 }
 
 async function runScenario(browser, url, scenario, expectedPhase) {
@@ -243,6 +256,7 @@ async function runScenario(browser, url, scenario, expectedPhase) {
     control = await devtoolsSocket(await devToolsUrl);
     await control.send("Page.enable");
     await control.send("Runtime.enable");
+    await control.send("Page.bringToFront");
     await control.send("Page.addScriptToEvaluateOnNewDocument", { source: fakeSerialSource(scenario) });
     await control.send("Page.navigate", { url });
     await waitFor(
@@ -252,6 +266,15 @@ async function runScenario(browser, url, scenario, expectedPhase) {
       `${scenario} preparation`,
     );
     await activateConnectionFromTrustedKeyboardGesture(control.send, control.evaluate);
+    await delay(100);
+    const gestureStarted = await control.evaluate(`(() => ({
+      phase: document.querySelector('.connection-card')?.dataset.connectionState,
+      requestCount: globalThis.__ADE_SERIAL_PROBE__?.serial?.requestCount ?? 0,
+      focused: document.activeElement === document.querySelector('.connection-card button'),
+    }))()`);
+    if (gestureStarted.phase === "ready" && gestureStarted.requestCount === 0) {
+      throw new Error(`PRODUCTION_TRUSTED_GESTURE_NOT_DELIVERED:${JSON.stringify(gestureStarted)}`);
+    }
     await waitFor(
       control.evaluate,
       "document.querySelector('.connection-card')?.dataset.connectionState ?? 'loading'",
