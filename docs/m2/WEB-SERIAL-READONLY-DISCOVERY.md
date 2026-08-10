@@ -1,8 +1,9 @@
 # M2 Web Serial read-only discovery
 
-This gate connects the real Rust WASM identification state machine to a narrow production Web
-Serial host. It is discovery only; it does not connect the approved UI or enter configuration,
-backup, planning, restore, save, reboot, DFU, CLI, telemetry, or hardware-write flows.
+This gate connected the real Rust WASM identification state machine to a narrow production Web
+Serial host. The later production UI integration is documented in
+`WEBAPP-READONLY-FC-CONNECTION.md`. Both remain discovery only and do not enter configuration,
+backup, restore, save, reboot, DFU, CLI, telemetry, or hardware-write flows.
 
 ## Authority path
 
@@ -34,7 +35,7 @@ table, parser, or fixture.
 
 ## Limitations and next gate
 
-- No production React wiring or UI behavior changes.
+- Production React wiring is limited to the later prepared read-only connection facade.
 - No automatic port enumeration/reconnection and no persisted port metadata.
 - No BeeperConfig snapshot and no write/save/reboot/restore operation.
 - A scope match is `PROPOSED — NOT HARDWARE VALIDATED`.

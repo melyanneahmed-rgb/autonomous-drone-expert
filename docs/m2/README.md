@@ -1,11 +1,14 @@
 # M2 — Product Core and WebAssembly Boundary
 
-**Status:** in progress — Commit 1 boundary, no hardware contact
+**Status:** in progress — production WebApp read-only identity gate, no hardware contact
 
 M2 turns the accepted M1 safety core into a product-level core that can be driven by a Web/PWA
-shell without moving protocol, write authority or recovery decisions into TypeScript. M2 is a
-core/UI architecture milestone. It does not open a serial port, identify a flight controller
-or write to hardware.
+shell without moving protocol, write authority or recovery decisions into TypeScript. The
+current production UI may explicitly select one Web Serial port and run the Rust-owned
+four-command read-only identity sequence. It still cannot write to hardware.
+
+Current production connection details and the post-review Windows procedure are recorded in
+[`WEBAPP-READONLY-FC-CONNECTION.md`](WEBAPP-READONLY-FC-CONNECTION.md).
 
 ## Commit 1 — implemented boundary
 

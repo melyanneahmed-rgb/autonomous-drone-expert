@@ -1,5 +1,11 @@
-const CACHE_NAME = "smart-configurator-shell-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/favicon.svg"];
+const CACHE_NAME = "smart-configurator-shell-v2";
+const APP_SHELL = [
+  "/",
+  "/manifest.webmanifest",
+  "/favicon.svg",
+  "/wasm/ade_web_readonly_serial_wasm_bridge.js",
+  "/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
