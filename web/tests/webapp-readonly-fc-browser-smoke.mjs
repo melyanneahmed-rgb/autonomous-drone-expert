@@ -204,16 +204,17 @@ async function waitFor(evaluate, expression, expected, label) {
   throw new Error(`${label}: expected ${expected}, got ${last}`);
 }
 
-async function clickConnection(send, evaluate) {
-  const point = await evaluate(`(() => {
+async function activateConnectionFromTrustedKeyboardGesture(send, evaluate) {
+  const focused = await evaluate(`(() => {
     const button = document.querySelector('.connection-card button');
-    button?.scrollIntoView({ block: 'center', inline: 'center' });
-    const box = button?.getBoundingClientRect();
-    return box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.focus({ preventScroll: false });
+    return document.activeElement === button;
   })()`);
-  if (!point) throw new Error("PRODUCTION_CONNECTION_BUTTON_MISSING");
-  await send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
-  await send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
+  if (!focused) throw new Error("PRODUCTION_CONNECTION_BUTTON_NOT_FOCUSABLE");
+  const key = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+  await send("Input.dispatchKeyEvent", { type: "keyDown", ...key });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", ...key });
 }
 
 async function runScenario(browser, url, scenario, expectedPhase) {
@@ -250,7 +251,7 @@ async function runScenario(browser, url, scenario, expectedPhase) {
       "ready",
       `${scenario} preparation`,
     );
-    await clickConnection(control.send, control.evaluate);
+    await activateConnectionFromTrustedKeyboardGesture(control.send, control.evaluate);
     await waitFor(
       control.evaluate,
       "document.querySelector('.connection-card')?.dataset.connectionState ?? 'loading'",

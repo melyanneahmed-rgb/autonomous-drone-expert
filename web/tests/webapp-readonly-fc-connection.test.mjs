@@ -13,6 +13,7 @@ const facadeTypes = read("src/connection/readonly-fc-connection.d.mts");
 const host = read("src/transport/webserial-readonly-host.mjs");
 const hostTypes = read("src/transport/webserial-readonly-host.d.mts");
 const viteConfig = read("vite.config.ts");
+const productionBrowser = read("tests/webapp-readonly-fc-browser-smoke.mjs");
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 test("the accepted production host remains byte-for-byte unchanged", () => {
@@ -81,6 +82,12 @@ test("Vite externalizes only the byte-locked same-origin generated module", () =
   );
   assert.match(viteConfig, /rolldownOptions:\s*\{/);
   assert.doesNotMatch(external.groups.entries, /\*|RegExp|new\s+URL|https?:/i);
+});
+
+test("production browser gate uses a trusted native gesture rather than DOM click injection", () => {
+  assert.match(productionBrowser, /Input\.dispatchKeyEvent/);
+  assert.match(productionBrowser, /navigator\.userActivation\?\.isActive === true/);
+  assert.doesNotMatch(productionBrowser, /\.click\s*\(/);
 });
 
 test("UI output and state are privacy bounded and make no hardware claim", () => {
