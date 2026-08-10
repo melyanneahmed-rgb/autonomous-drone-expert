@@ -204,6 +204,19 @@ async function waitFor(evaluate, expression, expected, label) {
   throw new Error(`${label}: expected ${expected}, got ${last}`);
 }
 
+async function waitForTerminalPhase(evaluate, label) {
+  const terminal = new Set(["read-complete", "scope-mismatch", "cancelled", "unavailable", "failed"]);
+  let last;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    last = await evaluate(
+      "document.querySelector('.connection-card')?.dataset.connectionState ?? 'loading'",
+    );
+    if (terminal.has(last)) return last;
+    await delay(100);
+  }
+  throw new Error(`${label}: no terminal phase; got ${last}`);
+}
+
 async function activateConnectionFromTrustedKeyboardGesture(send, evaluate) {
   const focused = await evaluate(`(() => {
     const button = document.querySelector('.connection-card button');
@@ -275,12 +288,26 @@ async function runScenario(browser, url, scenario, expectedPhase) {
     if (gestureStarted.phase === "ready" && gestureStarted.requestCount === 0) {
       throw new Error(`PRODUCTION_TRUSTED_GESTURE_NOT_DELIVERED:${JSON.stringify(gestureStarted)}`);
     }
-    await waitFor(
-      control.evaluate,
-      "document.querySelector('.connection-card')?.dataset.connectionState ?? 'loading'",
-      expectedPhase,
-      `${scenario} terminal phase`,
-    );
+    const terminalPhase = await waitForTerminalPhase(control.evaluate, `${scenario} terminal phase`);
+    if (terminalPhase !== expectedPhase) {
+      const boundedDiagnostic = await control.evaluate(`(() => ({
+        phase: document.querySelector('.connection-card')?.dataset.connectionState,
+        fields: Object.fromEntries(
+          [...document.querySelectorAll('[data-identity-field]')].map((node) => [
+            node.dataset.identityField,
+            node.querySelector('dd')?.textContent ?? '',
+          ]),
+        ),
+        requestCount: globalThis.__ADE_SERIAL_PROBE__?.serial?.requestCount ?? 0,
+        writeCount: globalThis.__ADE_SERIAL_PROBE__?.port?.writes?.length ?? 0,
+        openCount: globalThis.__ADE_SERIAL_PROBE__?.port?.openCount ?? 0,
+        closeCount: globalThis.__ADE_SERIAL_PROBE__?.port?.closeCount ?? 0,
+      }))()`);
+      throw new Error(
+        `${scenario} terminal phase: expected ${expectedPhase}; ` +
+          `bounded diagnostic ${JSON.stringify(boundedDiagnostic)}`,
+      );
+    }
     return await control.evaluate(`(() => {
       const probe = globalThis.__ADE_SERIAL_PROBE__;
       const fields = Object.fromEntries(
