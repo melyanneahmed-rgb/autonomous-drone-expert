@@ -92,13 +92,21 @@ def require_routes(routes: Mapping[str, Route]) -> None:
         raise FileNotFoundError("manual harness route is missing: " + ", ".join(missing))
 
 
-def handler_for(routes: Mapping[str, Route]) -> type[BaseHTTPRequestHandler]:
+def handler_for(
+    routes: Mapping[str, Route], allowed_authority: str | None = None
+) -> type[BaseHTTPRequestHandler]:
     """Create a no-listing, allowlist-only localhost handler."""
 
     class HarnessHandler(BaseHTTPRequestHandler):
         server_version = "AdeReadonlyHarness/1"
 
         def _serve(self, include_body: bool) -> None:
+            if self.client_address[0] != BIND_ADDRESS:
+                self.send_error(403)
+                return
+            if allowed_authority is not None and self.headers.get("Host") != allowed_authority:
+                self.send_error(421)
+                return
             route = routes.get(self.path)
             if route is None:
                 self.send_error(404)
@@ -112,7 +120,7 @@ def handler_for(routes: Mapping[str, Route]) -> type[BaseHTTPRequestHandler]:
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'none'; script-src 'self'; connect-src 'self'; "
+                "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; "
                 "style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
             )
             self.end_headers()
@@ -136,7 +144,9 @@ def main() -> int:
     build()
     routes = route_files()
     require_routes(routes)
-    server = ThreadingHTTPServer((BIND_ADDRESS, PORT), handler_for(routes))
+    server = ThreadingHTTPServer(
+        (BIND_ADDRESS, PORT), handler_for(routes, f"{BIND_ADDRESS}:{PORT}")
+    )
     print(f"Manual harness ready at {URL}")
     print("Open this URL in a Chromium browser with Web Serial support.")
     print("Press Ctrl+C after the owner-controlled observation.")

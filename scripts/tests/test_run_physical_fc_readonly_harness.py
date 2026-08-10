@@ -65,6 +65,9 @@ class PhysicalFcReadonlyHarnessTests(unittest.TestCase):
             payload.write_text("manual harness", encoding="utf-8")
             routes = {"/": HARNESS.Route(payload, "text/plain; charset=utf-8")}
             server = ThreadingHTTPServer(("127.0.0.1", 0), HARNESS.handler_for(routes))
+            server.RequestHandlerClass = HARNESS.handler_for(
+                routes, f"127.0.0.1:{server.server_port}"
+            )
             thread = Thread(target=server.serve_forever, daemon=True)
             thread.start()
             base = f"http://127.0.0.1:{server.server_port}"
@@ -73,11 +76,16 @@ class PhysicalFcReadonlyHarnessTests(unittest.TestCase):
                     self.assertEqual(response.read(), b"manual harness")
                     self.assertEqual(response.headers["Cache-Control"], "no-store")
                     self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
+                    self.assertIn("'wasm-unsafe-eval'", response.headers["Content-Security-Policy"])
                 with urlopen(Request(base + "/", method="HEAD"), timeout=5) as response:
                     self.assertEqual(response.read(), b"")
                 with self.assertRaises(HTTPError) as missing:
                     urlopen(base + "/not-allowlisted", timeout=5)
                 self.assertEqual(missing.exception.code, 404)
+                hostile_host = Request(base + "/", headers={"Host": "example.invalid"})
+                with self.assertRaises(HTTPError) as rejected_host:
+                    urlopen(hostile_host, timeout=5)
+                self.assertEqual(rejected_host.exception.code, 421)
             finally:
                 server.shutdown()
                 server.server_close()

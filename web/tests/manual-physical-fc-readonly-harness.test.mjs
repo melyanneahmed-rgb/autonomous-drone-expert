@@ -105,11 +105,12 @@ test("launcher is localhost-only, standard-library, and serves an explicit allow
   assert.match(launcher, /PORT: Final = 8765/);
   assert.doesNotMatch(launcher, /0\.0\.0\.0|SimpleHTTPRequestHandler|npm|npx|https:\/\//i);
   assert.deepEqual(launcher.match(/http:\/\/[^"\s]+/g), ["http://{BIND_ADDRESS}:{PORT}/"]);
-  assert.match(launcher, /ThreadingHTTPServer\(\(BIND_ADDRESS, PORT\), handler_for\(routes\)\)/);
+  assert.match(launcher, /handler_for\(routes, f"\{BIND_ADDRESS\}:\{PORT\}"\)/);
   assert.match(launcher, /cargo[\s\S]*\+1\.85\.0[\s\S]*ade-web-readonly-serial-wasm-bridge/);
   assert.match(launcher, /tools\/wasm-bindgen-cli-support\/Cargo\.toml/);
   assert.match(launcher, /Cache-Control", "no-store"/);
   assert.match(launcher, /Content-Security-Policy/);
+  assert.match(launcher, /script-src 'self' 'wasm-unsafe-eval'/);
 });
 
 test("accepted product UI and dependency locks remain byte-for-byte frozen", () => {
