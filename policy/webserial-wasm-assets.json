@@ -11,12 +11,13 @@
     },
     "rust_source": {
       "path": "crates/web-readonly-serial-wasm-bridge/src/lib.rs",
-      "git_blob_sha1": "d01646cdf9ea0bb4016a717e3ca9f97d12d8a2a6",
-      "sha256": "01528568bf5cfccf7eeba580f0e1f52e73d22fc00b2c72010dc1b23c1bf59db0"
+      "git_blob_sha1": "85f0253498b25abfcdd600809c8a71c95ae43268",
+      "sha256": "ff3fb7b1f1ff1f857caf89fc36c5315c4f47620227783184a9e86b9d955ae048"
     },
     "build_toolchain": "1.85.0",
     "target": "wasm32-unknown-unknown",
-    "input_wasm_sha256": "812a2ea62564cdb958f54311afc3a8f9e7d5889b468977abea36e46531ccfc03"
+    "deterministic_source_prefix": "/source/",
+    "input_wasm_sha256": "64ef587ffa2494bece1f06787cb181486d26781af201607f41401b138a5d8a01"
   },
   "generator": {
     "package": "wasm-bindgen-cli-support",
@@ -31,7 +32,13 @@
       "git_blob_sha1": "b5334fac369066735dde55604f0a2fe7ec4260f6",
       "sha256": "6b13d9e3029e446a9a09a9d7e0db0ad506af89340c484be744b105c67dc3c716"
     },
+    "isolated_source": {
+      "path": "tools/wasm-bindgen-cli-support/src/main.rs",
+      "git_blob_sha1": "cd7ae438c10fa4a9f21d521cb624ffb66b66dec8",
+      "sha256": "a55e7efc93f1ff5fa9232fa960ab977abf114a93f61374c2392141b145d450cc"
+    },
     "toolchain": "1.97.1",
+    "remove_name_section": true,
     "canonical_environment": "github-actions/ubuntu-latest",
     "canonical_workflow": ".github/workflows/ci.yml",
     "generation_command": "cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm <temporary-output-directory>"
@@ -39,24 +46,19 @@
   "outputs": [
     {
       "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge.js",
-      "sha256": "68e2ee99c2c1a77e2d35b495672bef6f8896a384a9c4f79e26599d14ec9fbe6c",
-      "size": 16827
+      "sha256": "ca000caa3cd1f6c7385116201b2229537d82bc248d773399442cae67a5dff3f3",
+      "size": 17860
     },
     {
       "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
-      "sha256": "c497cdab06207e6d034f0383f0f4e704c18bfbde0a20f5daf6eb8cd09615eaf7",
-      "size": 66102
+      "sha256": "c0c9ade89ee90545c4363b9900974cef7f66e9cd63192e264ef9833e13e9f48e",
+      "size": 55400
     }
   ],
   "verification": {
     "script": "scripts/verify_webserial_product_assets.py",
     "comparison": "byte-for-byte",
     "required_dist_prefix": "dist/wasm/",
-    "canonical_capture_ci_run": {
-      "run_number": 75,
-      "run_id": 31429570714,
-      "job_id": 93589413209,
-      "result": "trusted-linux-byte-capture"
-    }
+    "canonical_capture": "required trusted-Linux regeneration at the immutable PR head"
   }
 }

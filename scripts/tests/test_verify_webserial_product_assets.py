@@ -53,13 +53,17 @@ class WebSerialProductAssetTests(unittest.TestCase):
 
     def test_generator_version_and_output_hash_drift_fail_closed(self) -> None:
         original = json.loads((assets.ROOT / assets.MANIFEST).read_text(encoding="utf-8"))
-        for mutation in ("version", "sha256"):
+        for mutation in ("version", "sha256", "name_section", "generator_source"):
             with self.subTest(mutation=mutation), TemporaryDirectory() as temporary:
                 manifest = json.loads(json.dumps(original))
                 if mutation == "version":
                     manifest["generator"]["version"] = "0.2.128"
-                else:
+                elif mutation == "sha256":
                     manifest["outputs"][0]["sha256"] = "0" * 64
+                elif mutation == "name_section":
+                    manifest["generator"]["remove_name_section"] = False
+                else:
+                    manifest["generator"]["isolated_source"]["sha256"] = "0" * 64
                 path = Path(temporary) / "manifest.json"
                 path.write_text(json.dumps(manifest), encoding="utf-8")
                 self.assertTrue(assets.verify(manifest_path=path))

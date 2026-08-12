@@ -96,6 +96,8 @@ def verify(
         errors.append("product WASM build toolchain drifted")
     if source.get("target") != "wasm32-unknown-unknown":
         errors.append("product WASM target drifted")
+    if source.get("deterministic_source_prefix") != "/source/":
+        errors.append("product WASM deterministic source prefix drifted")
     input_sha = source.get("input_wasm_sha256")
     if not isinstance(input_sha, str) or not HEX_SHA256.fullmatch(input_sha):
         errors.append("input_wasm_sha256 must be lowercase SHA-256")
@@ -119,6 +121,9 @@ def verify(
         _check_record(root, generator.get("isolated_manifest"), "generator.isolated_manifest")
     )
     errors.extend(_check_record(root, generator.get("isolated_lock"), "generator.isolated_lock"))
+    errors.extend(_check_record(root, generator.get("isolated_source"), "generator.isolated_source"))
+    if generator.get("remove_name_section") is not True:
+        errors.append("host-specific WASM name metadata must be removed deterministically")
 
     outputs = manifest.get("outputs")
     if not isinstance(outputs, list) or len(outputs) != 2:

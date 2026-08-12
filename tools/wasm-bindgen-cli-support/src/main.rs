@@ -36,7 +36,14 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     let name = output_name(&input)?;
     let mut bindgen = Bindgen::new();
-    bindgen.input_path(&input).out_name(name).typescript(false);
+    bindgen
+        .input_path(&input)
+        .out_name(name)
+        .typescript(false)
+        // Rust symbol hashes differ by compiler host but are non-executable debug metadata.
+        // Removing the name section makes the committed product asset reproducible while
+        // retaining every runtime import, export, type and instruction.
+        .remove_name_section(true);
     bindgen.web(true)?;
     bindgen.generate(&output)?;
     Ok(())

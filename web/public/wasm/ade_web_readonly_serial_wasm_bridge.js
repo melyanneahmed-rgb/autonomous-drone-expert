@@ -195,6 +195,36 @@ export class WasmReadonlySerialDiscovery {
         return v1;
     }
     /**
+     * The allowlisted structural reason for a protocol failure.
+     *
+     * Numeric counts and all raw response or identity data are deliberately discarded.
+     * @returns {string | undefined}
+     */
+    get failureReason() {
+        const ret = wasm.wasmreadonlyserialdiscovery_failureReason(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * The fixed identity stage at which a protocol failure occurred.
+     *
+     * This getter exposes only one of four stable labels and never command bytes or payload.
+     * @returns {string | undefined}
+     */
+    get failureStage() {
+        const ret = wasm.wasmreadonlyserialdiscovery_failureStage(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
      * @returns {string | undefined}
      */
     get fcVariant() {

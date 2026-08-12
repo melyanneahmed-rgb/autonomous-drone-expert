@@ -84,6 +84,11 @@ jobs:
         run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
 
       - name: Build the read-only Web Serial Rust bridge at MSRV
+        env:
+          RUSTFLAGS: >-
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/convert/slices.rs=/source/wasm-bindgen/src/convert/slices.rs
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/externref.rs=/source/wasm-bindgen/src/externref.rs
+            --remap-path-prefix=crates/protocol-msp/src/lib.rs=/source/project/crates/protocol-msp/src/lib.rs
         run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
 
       - name: Generate Web glue with the isolated pinned tool
