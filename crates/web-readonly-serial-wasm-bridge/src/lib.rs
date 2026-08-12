@@ -10,7 +10,9 @@
 use core::fmt;
 
 use ade_core_api::{ScopeStatus, check_scope};
-use ade_execution::{ExecError, IdentificationRequest, ReadonlyIdentification};
+use ade_execution::{
+    ExecError, IdentificationRequest, IdentificationStage, ReadonlyIdentification,
+};
 use ade_facts::DeviceIdentity;
 use ade_protocol_msp::{
     CommandId, Direction, MspError, MspV1ResponseAccumulator, ResponseProgress, decode_frame,
@@ -127,7 +129,114 @@ enum FinalOutcome {
         identity: DeviceIdentity,
         field: &'static str,
     },
-    Failed(&'static str),
+    Failed {
+        class: &'static str,
+        diagnostic: Option<IdentityFailureDiagnostic>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentityFailureReason {
+    PayloadTooLong,
+    FrameTooLarge,
+    Truncated,
+    TrailingBytes,
+    BadPreamble,
+    BadDirection,
+    BadChecksum,
+    WrongCommand,
+    WrongDirection,
+    ErrorReply,
+    ReplyMisclassified,
+    WrongLength,
+    FieldOverrun,
+    TrailingPayload,
+    InvalidUtf8,
+    OtherProtocolIdentityFailure,
+}
+
+impl IdentityFailureReason {
+    const fn from_msp(error: &MspError) -> Self {
+        match error {
+            MspError::PayloadTooLong(_) => Self::PayloadTooLong,
+            MspError::FrameTooLarge { .. } => Self::FrameTooLarge,
+            MspError::Truncated { .. } => Self::Truncated,
+            MspError::TrailingBytes { .. } => Self::TrailingBytes,
+            MspError::BadPreamble => Self::BadPreamble,
+            MspError::BadDirection(_) => Self::BadDirection,
+            MspError::BadChecksum { .. } => Self::BadChecksum,
+            MspError::WrongCommand { .. } => Self::WrongCommand,
+            MspError::WrongDirection => Self::WrongDirection,
+            MspError::WrongLength { .. } => Self::WrongLength,
+            MspError::FieldOverrun { .. } => Self::FieldOverrun,
+            MspError::TrailingPayload { .. } => Self::TrailingPayload,
+            MspError::InvalidUtf8 { .. } => Self::InvalidUtf8,
+        }
+    }
+
+    const fn from_exec(error: &ExecError) -> Self {
+        match error {
+            ExecError::Payload(error) => Self::from_msp(error),
+            ExecError::ReplyCommandMismatch { .. } => Self::WrongCommand,
+            ExecError::ReplyDirectionInvalid => Self::WrongDirection,
+            ExecError::ErrorReply { .. } => Self::ErrorReply,
+            ExecError::ReplyMisclassified(_) => Self::ReplyMisclassified,
+            _ => Self::OtherProtocolIdentityFailure,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::PayloadTooLong => "PayloadTooLong",
+            Self::FrameTooLarge => "FrameTooLarge",
+            Self::Truncated => "Truncated",
+            Self::TrailingBytes => "TrailingBytes",
+            Self::BadPreamble => "BadPreamble",
+            Self::BadDirection => "BadDirection",
+            Self::BadChecksum => "BadChecksum",
+            Self::WrongCommand => "WrongCommand",
+            Self::WrongDirection => "WrongDirection",
+            Self::ErrorReply => "ErrorReply",
+            Self::ReplyMisclassified => "ReplyMisclassified",
+            Self::WrongLength => "WrongLength",
+            Self::FieldOverrun => "FieldOverrun",
+            Self::TrailingPayload => "TrailingPayload",
+            Self::InvalidUtf8 => "InvalidUtf8",
+            Self::OtherProtocolIdentityFailure => "OtherProtocolIdentityFailure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IdentityFailureDiagnostic {
+    stage: IdentificationStage,
+    reason: IdentityFailureReason,
+}
+
+impl IdentityFailureDiagnostic {
+    const fn from_msp(stage: IdentificationStage, error: &MspError) -> Self {
+        Self {
+            stage,
+            reason: IdentityFailureReason::from_msp(error),
+        }
+    }
+
+    const fn from_exec(stage: IdentificationStage, error: &ExecError) -> Self {
+        Self {
+            stage,
+            reason: IdentityFailureReason::from_exec(error),
+        }
+    }
+
+    const fn stage_label(self) -> Option<&'static str> {
+        match self.stage {
+            IdentificationStage::ApiVersion => Some("API_VERSION"),
+            IdentificationStage::FcVariant => Some("FC_VARIANT"),
+            IdentificationStage::FcVersion => Some("FC_VERSION"),
+            IdentificationStage::BoardInfo => Some("BOARD_INFO"),
+            IdentificationStage::Complete => None,
+        }
+    }
 }
 
 /// One opaque host operation created by the Rust discovery state machine.
@@ -317,7 +426,10 @@ impl WasmReadonlySerialDiscovery {
             result: TransportResult::Open(Err(failure)),
         })?;
         self.pending_id = None;
-        self.outcome = Some(FinalOutcome::Failed(failure_label(failure)));
+        self.outcome = Some(FinalOutcome::Failed {
+            class: failure_label(failure),
+            diagnostic: None,
+        });
         self.phase = Phase::Complete;
         Ok(())
     }
@@ -326,10 +438,14 @@ impl WasmReadonlySerialDiscovery {
         &mut self,
         request_id: RequestId,
         label: &'static str,
+        diagnostic: Option<IdentityFailureDiagnostic>,
     ) -> Result<WasmReadonlySerialDirective, BridgeError> {
         self.coordinator.cancel_transport(request_id)?;
         self.pending_id = None;
-        self.outcome = Some(FinalOutcome::Failed(label));
+        self.outcome = Some(FinalOutcome::Failed {
+            class: label,
+            diagnostic,
+        });
         self.start_close()
     }
 
@@ -346,9 +462,11 @@ impl WasmReadonlySerialDiscovery {
             .push(chunk)
         {
             Ok(progress) => progress,
-            Err(_) => {
+            Err(error) => {
+                let diagnostic =
+                    IdentityFailureDiagnostic::from_msp(self.identification.stage(), &error);
                 return self
-                    .fail_exchange(request_id, "MalformedResponse")
+                    .fail_exchange(request_id, "MalformedResponse", Some(diagnostic))
                     .map(Some);
             }
         };
@@ -376,8 +494,14 @@ impl WasmReadonlySerialDiscovery {
                 self.start_close().map(Some)
             }
             Ok(None) => self.next_exchange().map(Some),
-            Err(_) => {
-                self.outcome = Some(FinalOutcome::Failed("ProtocolIdentityFailure"));
+            Err(error) => {
+                self.outcome = Some(FinalOutcome::Failed {
+                    class: "ProtocolIdentityFailure",
+                    diagnostic: Some(IdentityFailureDiagnostic::from_exec(
+                        self.identification.stage(),
+                        &error,
+                    )),
+                });
                 self.start_close().map(Some)
             }
         }
@@ -395,7 +519,10 @@ impl WasmReadonlySerialDiscovery {
             result: TransportResult::Exchange(Err(failure)),
         })?;
         self.pending_id = None;
-        self.outcome = Some(FinalOutcome::Failed(failure_label(failure)));
+        self.outcome = Some(FinalOutcome::Failed {
+            class: failure_label(failure),
+            diagnostic: None,
+        });
         self.start_close()
     }
 
@@ -409,7 +536,10 @@ impl WasmReadonlySerialDiscovery {
             .accept(IoResponse::Transport { request_id, result })?;
         self.pending_id = None;
         if failure.is_some() {
-            self.outcome = Some(FinalOutcome::Failed("CloseFailure"));
+            self.outcome = Some(FinalOutcome::Failed {
+                class: "CloseFailure",
+                diagnostic: None,
+            });
         }
         self.phase = Phase::Complete;
         Ok(())
@@ -420,7 +550,7 @@ impl WasmReadonlySerialDiscovery {
             FinalOutcome::InScope(identity) | FinalOutcome::ScopeMismatch { identity, .. } => {
                 Some(identity)
             }
-            FinalOutcome::Failed(_) => None,
+            FinalOutcome::Failed { .. } => None,
         }
     }
 }
@@ -487,7 +617,7 @@ impl WasmReadonlySerialDiscovery {
             Some(FinalOutcome::ScopeMismatch { .. }) if self.phase == Phase::Complete => {
                 "scope-mismatch"
             }
-            Some(FinalOutcome::Failed(_)) if self.phase == Phase::Complete => "failed",
+            Some(FinalOutcome::Failed { .. }) if self.phase == Phase::Complete => "failed",
             _ => "pending",
         }
         .to_owned()
@@ -496,7 +626,35 @@ impl WasmReadonlySerialDiscovery {
     #[wasm_bindgen(getter, js_name = failureClass)]
     pub fn failure_class(&self) -> Option<String> {
         match &self.outcome {
-            Some(FinalOutcome::Failed(label)) => Some((*label).to_owned()),
+            Some(FinalOutcome::Failed { class, .. }) => Some((*class).to_owned()),
+            _ => None,
+        }
+    }
+
+    /// The fixed identity stage at which a protocol failure occurred.
+    ///
+    /// This getter exposes only one of four stable labels and never command bytes or payload.
+    #[wasm_bindgen(getter, js_name = failureStage)]
+    pub fn failure_stage(&self) -> Option<String> {
+        match &self.outcome {
+            Some(FinalOutcome::Failed {
+                diagnostic: Some(diagnostic),
+                ..
+            }) => diagnostic.stage_label().map(str::to_owned),
+            _ => None,
+        }
+    }
+
+    /// The allowlisted structural reason for a protocol failure.
+    ///
+    /// Numeric counts and all raw response or identity data are deliberately discarded.
+    #[wasm_bindgen(getter, js_name = failureReason)]
+    pub fn failure_reason(&self) -> Option<String> {
+        match &self.outcome {
+            Some(FinalOutcome::Failed {
+                diagnostic: Some(diagnostic),
+                ..
+            }) => Some(diagnostic.reason.label().to_owned()),
             _ => None,
         }
     }
@@ -553,6 +711,82 @@ mod tests {
             request_id: RequestId::new(9),
             effect,
         }
+    }
+
+    fn valid_board_payload() -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"F405");
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&[0, 0]);
+        for value in ["SPEEDYBEEF405V4", "SpeedyBee F405 V4", "SPB"] {
+            payload.push(u8::try_from(value.len()).unwrap());
+            payload.extend_from_slice(value.as_bytes());
+        }
+        payload.extend_from_slice(&[0; ade_protocol_msp::SIGNATURE_LENGTH]);
+        payload.extend_from_slice(&[0, 0]);
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&[0, 0]);
+        payload
+    }
+
+    fn feed_reply(
+        bridge: &mut WasmReadonlySerialDiscovery,
+        directive: &WasmReadonlySerialDirective,
+        direction: Direction,
+        command: CommandId,
+        payload: &[u8],
+    ) -> WasmReadonlySerialDirective {
+        let frame = encode_frame(direction, command, payload).unwrap();
+        bridge
+            .accept_chunk(&directive.request_id, &frame)
+            .unwrap()
+            .expect("a complete reply must produce the next directive")
+    }
+
+    fn bridge_at(
+        stage: IdentificationStage,
+    ) -> (WasmReadonlySerialDiscovery, WasmReadonlySerialDirective) {
+        let mut bridge = WasmReadonlySerialDiscovery::create().unwrap();
+        let open = bridge.begin_open().unwrap();
+        let mut exchange = bridge.accept_open_ok(&open.request_id).unwrap();
+        let prefix: &[(CommandId, &[u8])] = &[
+            (CommandId::ApiVersion, &[0, 1, 46]),
+            (CommandId::FcVariant, b"BTFL"),
+            (CommandId::FcVersion, &[4, 5, 5]),
+        ];
+        let count = match stage {
+            IdentificationStage::ApiVersion => 0,
+            IdentificationStage::FcVariant => 1,
+            IdentificationStage::FcVersion => 2,
+            IdentificationStage::BoardInfo => 3,
+            IdentificationStage::Complete => panic!("complete has no pending read"),
+        };
+        for &(command, payload) in &prefix[..count] {
+            exchange = feed_reply(&mut bridge, &exchange, Direction::Reply, command, payload);
+        }
+        assert_eq!(bridge.identification.stage(), stage);
+        (bridge, exchange)
+    }
+
+    fn assert_failure(
+        mut bridge: WasmReadonlySerialDiscovery,
+        exchange: WasmReadonlySerialDirective,
+        direction: Direction,
+        command: CommandId,
+        payload: &[u8],
+        expected: (&str, &str, &str),
+    ) {
+        let (class, stage, reason) = expected;
+        let close = feed_reply(&mut bridge, &exchange, direction, command, payload);
+        assert_eq!(close.kind, "close");
+        assert_eq!(bridge.failure_class().as_deref(), Some(class));
+        assert_eq!(bridge.failure_stage().as_deref(), Some(stage));
+        assert_eq!(bridge.failure_reason().as_deref(), Some(reason));
+        assert!(bridge.identity().is_none());
+        bridge.accept_close(&close.request_id, None).unwrap();
+        assert_eq!(bridge.outcome_kind(), "failed");
+        assert!(!bridge.hardware_observed());
     }
 
     #[test]
@@ -683,5 +917,117 @@ mod tests {
         assert!(bridge.accept_open_ok(&open.request_id).is_err());
         assert!(bridge.coordinator.has_pending_transport());
         assert_ne!(exchange.request_id, open.request_id);
+    }
+
+    #[test]
+    fn fixed_length_decode_failures_report_each_exact_identity_stage() {
+        let (bridge, exchange) = bridge_at(IdentificationStage::ApiVersion);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::ApiVersion,
+            &[0, 1],
+            ("ProtocolIdentityFailure", "API_VERSION", "WrongLength"),
+        );
+
+        let (bridge, exchange) = bridge_at(IdentificationStage::FcVariant);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::FcVariant,
+            b"BTF",
+            ("ProtocolIdentityFailure", "FC_VARIANT", "WrongLength"),
+        );
+
+        let (bridge, exchange) = bridge_at(IdentificationStage::FcVersion);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::FcVersion,
+            &[4, 5],
+            ("ProtocolIdentityFailure", "FC_VERSION", "WrongLength"),
+        );
+    }
+
+    #[test]
+    fn board_info_structural_failures_expose_categories_without_payload_data() {
+        let (bridge, exchange) = bridge_at(IdentificationStage::BoardInfo);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::BoardInfo,
+            &[],
+            ("ProtocolIdentityFailure", "BOARD_INFO", "FieldOverrun"),
+        );
+
+        let mut trailing = valid_board_payload();
+        trailing.push(0);
+        let (bridge, exchange) = bridge_at(IdentificationStage::BoardInfo);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::BoardInfo,
+            &trailing,
+            ("ProtocolIdentityFailure", "BOARD_INFO", "TrailingPayload"),
+        );
+
+        let mut invalid_utf8 = valid_board_payload();
+        invalid_utf8[9] = 0xff;
+        let (bridge, exchange) = bridge_at(IdentificationStage::BoardInfo);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::BoardInfo,
+            &invalid_utf8,
+            ("ProtocolIdentityFailure", "BOARD_INFO", "InvalidUtf8"),
+        );
+    }
+
+    #[test]
+    fn correlation_and_error_replies_remain_typed_and_fail_closed() {
+        let (bridge, exchange) = bridge_at(IdentificationStage::ApiVersion);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::FcVariant,
+            b"BTFL",
+            ("MalformedResponse", "API_VERSION", "WrongCommand"),
+        );
+
+        let (bridge, exchange) = bridge_at(IdentificationStage::ApiVersion);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Error,
+            CommandId::ApiVersion,
+            &[],
+            ("ProtocolIdentityFailure", "API_VERSION", "ErrorReply"),
+        );
+    }
+
+    #[test]
+    fn successful_identity_path_has_no_failure_diagnostic() {
+        let (mut bridge, exchange) = bridge_at(IdentificationStage::BoardInfo);
+        let close = feed_reply(
+            &mut bridge,
+            &exchange,
+            Direction::Reply,
+            CommandId::BoardInfo,
+            &valid_board_payload(),
+        );
+        assert_eq!(close.kind, "close");
+        assert!(bridge.failure_class().is_none());
+        assert!(bridge.failure_stage().is_none());
+        assert!(bridge.failure_reason().is_none());
+        bridge.accept_close(&close.request_id, None).unwrap();
+        assert_eq!(bridge.outcome_kind(), "in-scope");
+        assert!(!bridge.hardware_observed());
     }
 }

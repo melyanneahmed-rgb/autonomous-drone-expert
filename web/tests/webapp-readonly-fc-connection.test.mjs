@@ -27,11 +27,11 @@ function numericFixture(source, declaration) {
   );
 }
 
-test("the accepted production host remains byte-for-byte unchanged", () => {
-  assert.equal(sha256(host), "a27c3f885ccff82041f85a7f6febc38ab80a9bac6a985320d4f49f68f0350973");
+test("the bounded production host and declaration are byte-locked", () => {
+  assert.equal(sha256(host), "b45009fac582e7c33f761c71ed58201c0fe2cf4b3d7587d6aae9aad1227b3309");
   assert.equal(
     sha256(hostTypes),
-    "6c16e032e9fbbad7ace75d6a29ecc83ff5d792f8198fa3cf55cb647e0a76ee61",
+    "03d6442a8a9b862e93857029c38a28c78c5cb56d2b8631dd12504a03bbfb9a01",
   );
 });
 
@@ -116,6 +116,8 @@ test("UI output and state are privacy bounded and make no hardware claim", () =>
     "targetName",
     "scopeMismatchField",
     "failure",
+    "failureStage",
+    "failureReason",
   ];
   assert.deepEqual(
     [...app.matchAll(/data-identity-field="([A-Za-z]+)"/g)].map((match) => match[1]),
@@ -131,6 +133,14 @@ test("UI output and state are privacy bounded and make no hardware claim", () =>
     /serial.?number|\bCOM\d+\b|usbVendorId|usbProductId|\bVID\b|\bPID\b|getInfo|deviceId|unique.?id|raw.?frame/i,
   );
   assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB|document\.cookie/);
+  assert.match(host, /failureStage: discovery\.failureStage \?\? undefined/);
+  assert.match(host, /failureReason: discovery\.failureReason \?\? undefined/);
+  assert.match(facadeTypes, /"API_VERSION"[\s\S]*"FC_VARIANT"[\s\S]*"FC_VERSION"[\s\S]*"BOARD_INFO"/);
+  assert.match(
+    facadeTypes,
+    /"WrongCommand"[\s\S]*"WrongDirection"[\s\S]*"ErrorReply"[\s\S]*"ReplyMisclassified"[\s\S]*"WrongLength"[\s\S]*"FieldOverrun"[\s\S]*"TrailingPayload"[\s\S]*"InvalidUtf8"/,
+  );
+  assert.doesNotMatch(`${facade}\n${facadeTypes}`, /expectedBytes|foundBytes|rawPayload|signature|uid|serialNumber/i);
   assert.match(facade, /result\.hardwareObserved !== false/);
   assert.doesNotMatch(app, /hardwareObserved/);
   assert.doesNotMatch(app, /\b(?:CONNECTED|SUPPORTED|VALIDATED)\b/);

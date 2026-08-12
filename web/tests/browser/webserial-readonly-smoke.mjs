@@ -272,16 +272,18 @@ function scenarioECorrelation() {
 
 async function scenarioFFailClosed() {
   mark("F-malformed-timeout-disconnect");
-  for (const [mode, expected] of [
-    ["bad-checksum", "MalformedResponse"],
-    ["truncated-timeout", "Timeout"],
-    ["disconnect", "Disconnected"],
-    ["oversized", "MalformedResponse"],
-    ["wrong-command", "MalformedResponse"],
+  for (const [mode, expected, stage, reason] of [
+    ["bad-checksum", "MalformedResponse", "API_VERSION", "BadChecksum"],
+    ["truncated-timeout", "Timeout", undefined, undefined],
+    ["disconnect", "Disconnected", undefined, undefined],
+    ["oversized", "MalformedResponse", "API_VERSION", "FrameTooLarge"],
+    ["wrong-command", "MalformedResponse", "API_VERSION", "WrongCommand"],
   ]) {
     const run = await runDiscovery(IN_SCOPE_REPLIES, mode, 15);
     assert(run.result.outcome === "failed", `${mode} failed`);
     assert(run.result.failure === expected, `${mode} stable failure`);
+    assert(run.result.failureStage === stage, `${mode} bounded stage`);
+    assert(run.result.failureReason === reason, `${mode} bounded reason`);
     assert(run.port.closeCount === 1, `${mode} closed`);
     assert(run.port.readerReleased === 1, `${mode} reader released`);
     assert(run.port.writerReleased === 1, `${mode} writer released`);

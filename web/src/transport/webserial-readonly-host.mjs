@@ -185,6 +185,8 @@ export class WebSerialReadonlyHost {
       return {
         outcome: discovery.outcomeKind,
         failure: discovery.failureClass ?? undefined,
+        failureStage: discovery.failureStage ?? undefined,
+        failureReason: discovery.failureReason ?? undefined,
         scopeMismatchField: discovery.scopeMismatchField ?? undefined,
         apiVersion: discovery.apiVersion ?? undefined,
         fcVariant: discovery.fcVariant ?? undefined,

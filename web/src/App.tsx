@@ -892,6 +892,18 @@ export default function App() {
                       <dd>{connection.result.failure}</dd>
                     </div>
                   )}
+                  {connection.result.failureStage && (
+                    <div data-identity-field="failureStage">
+                      <dt>مرحلة القراءة</dt>
+                      <dd>{connection.result.failureStage}</dd>
+                    </div>
+                  )}
+                  {connection.result.failureReason && (
+                    <div data-identity-field="failureReason">
+                      <dt>السبب البنيوي</dt>
+                      <dd>{connection.result.failureReason}</dd>
+                    </div>
+                  )}
                 </dl>
               )}
               <small>

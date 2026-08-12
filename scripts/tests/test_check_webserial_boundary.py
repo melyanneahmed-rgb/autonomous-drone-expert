@@ -155,6 +155,9 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
             "TransportEffect",
             "localStorage.setItem('device', value)",
             "const hardwareObserved = true;",
+            "const boardSignature = value;",
+            "const UID = value;",
+            "const rawPayload = bytes;",
         ):
             self.rejected(str(check_webserial_boundary.APP), marker)
 

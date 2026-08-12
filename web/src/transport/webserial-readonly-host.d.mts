@@ -12,9 +12,35 @@ export interface PortSelectionResult {
   failure?: WebSerialFailure;
 }
 
+export type IdentityFailureStage =
+  | "API_VERSION"
+  | "FC_VARIANT"
+  | "FC_VERSION"
+  | "BOARD_INFO";
+
+export type IdentityFailureReason =
+  | "PayloadTooLong"
+  | "FrameTooLarge"
+  | "Truncated"
+  | "TrailingBytes"
+  | "BadPreamble"
+  | "BadDirection"
+  | "BadChecksum"
+  | "WrongCommand"
+  | "WrongDirection"
+  | "ErrorReply"
+  | "ReplyMisclassified"
+  | "WrongLength"
+  | "FieldOverrun"
+  | "TrailingPayload"
+  | "InvalidUtf8"
+  | "OtherProtocolIdentityFailure";
+
 export interface ReadonlyDiscoveryResult {
   outcome: "in-scope" | "scope-mismatch" | "failed" | "pending";
   failure?: string;
+  failureStage?: IdentityFailureStage;
+  failureReason?: IdentityFailureReason;
   scopeMismatchField?: string;
   apiVersion?: string;
   fcVariant?: string;

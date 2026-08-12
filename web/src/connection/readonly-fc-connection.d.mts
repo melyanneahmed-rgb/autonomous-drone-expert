@@ -15,6 +15,30 @@ export interface PortSelectionResult {
   failure?: ReadonlyFcFailure;
 }
 
+export type IdentityFailureStage =
+  | "API_VERSION"
+  | "FC_VARIANT"
+  | "FC_VERSION"
+  | "BOARD_INFO";
+
+export type IdentityFailureReason =
+  | "PayloadTooLong"
+  | "FrameTooLarge"
+  | "Truncated"
+  | "TrailingBytes"
+  | "BadPreamble"
+  | "BadDirection"
+  | "BadChecksum"
+  | "WrongCommand"
+  | "WrongDirection"
+  | "ErrorReply"
+  | "ReplyMisclassified"
+  | "WrongLength"
+  | "FieldOverrun"
+  | "TrailingPayload"
+  | "InvalidUtf8"
+  | "OtherProtocolIdentityFailure";
+
 export interface PrivacyBoundedIdentityResult {
   outcome: "in-scope" | "scope-mismatch" | "failed" | "pending";
   apiVersion?: string;
@@ -23,6 +47,8 @@ export interface PrivacyBoundedIdentityResult {
   targetName?: string;
   scopeMismatchField?: string;
   failure?: ReadonlyFcFailure | string;
+  failureStage?: IdentityFailureStage;
+  failureReason?: IdentityFailureReason;
 }
 
 export interface ReadonlyFcConnection {

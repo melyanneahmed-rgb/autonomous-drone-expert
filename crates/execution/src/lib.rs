@@ -187,12 +187,21 @@ impl IdentificationRequest {
     }
 }
 
+/// Current step in the fixed four-read identity sequence.
+///
+/// This is observation-only state. It exposes neither a command constructor nor a way to
+/// advance or replace the Rust-owned sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IdentificationStage {
+pub enum IdentificationStage {
+    /// Waiting for `MSP_API_VERSION`.
     ApiVersion,
+    /// Waiting for `MSP_FC_VARIANT`.
     FcVariant,
+    /// Waiting for `MSP_FC_VERSION`.
     FcVersion,
+    /// Waiting for `MSP_BOARD_INFO`.
     BoardInfo,
+    /// All four typed replies were accepted.
     Complete,
 }
 
@@ -258,6 +267,15 @@ impl ReadonlyIdentification {
         self.correlator.on_request(command);
         self.request_pending = true;
         Ok(IdentificationRequest { command, bytes })
+    }
+
+    /// Observe the current typed identity stage for bounded failure diagnostics.
+    ///
+    /// The returned enum carries no command bytes, payload, device identity or transition
+    /// authority.
+    #[must_use]
+    pub const fn stage(&self) -> IdentificationStage {
+        self.stage
     }
 
     /// Accept exactly one complete response and advance the canonical identity state.
@@ -1007,5 +1025,50 @@ mod tests {
             identification.next_request().unwrap_err(),
             ExecError::IdentificationRequestPending
         );
+    }
+
+    #[test]
+    fn identity_stage_observation_survives_duplicate_and_out_of_order_failures() {
+        let mut duplicate = ReadonlyIdentification::new(SessionState::Identifying).unwrap();
+        assert_eq!(duplicate.stage(), IdentificationStage::ApiVersion);
+        duplicate.next_request().unwrap();
+        duplicate
+            .accept_response(
+                &decode_frame(
+                    &encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(duplicate.stage(), IdentificationStage::FcVariant);
+        duplicate.next_request().unwrap();
+        assert_eq!(
+            duplicate
+                .accept_response(
+                    &decode_frame(
+                        &encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46])
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap_err(),
+            ExecError::ReplyMisclassified(ReplyClass::Duplicate),
+        );
+        assert_eq!(duplicate.stage(), IdentificationStage::FcVariant);
+
+        let mut out_of_order = ReadonlyIdentification::new(SessionState::Identifying).unwrap();
+        out_of_order.next_request().unwrap();
+        assert_eq!(
+            out_of_order
+                .accept_response(
+                    &decode_frame(
+                        &encode_frame(Direction::Reply, CommandId::FcVariant, b"BTFL").unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap_err(),
+            ExecError::ReplyMisclassified(ReplyClass::Unsolicited),
+        );
+        assert_eq!(out_of_order.stage(), IdentificationStage::ApiVersion);
     }
 }

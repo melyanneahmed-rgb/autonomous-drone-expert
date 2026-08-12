@@ -16,6 +16,8 @@ function privacyBoundedResult(result) {
     targetName: result.targetName,
     scopeMismatchField: result.scopeMismatchField,
     failure: result.failure,
+    failureStage: result.failureStage,
+    failureReason: result.failureReason,
   };
 }
 

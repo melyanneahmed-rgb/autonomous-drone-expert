@@ -80,9 +80,18 @@ function installFakeSerial(scenario) {
     [36, 77, 62, 3, 3, 4, 5, 5, 4],
     [36, 77, 62, 88, 4, 83, 52, 48, 53, 0, 0, 0, 0, 15, 83, 80, 69, 69, 68, 89, 66, 69, 69, 70, 52, 48, 53, 86, 52, 17, 83, 112, 101, 101, 100, 121, 66, 101, 101, 32, 70, 52, 48, 53, 32, 86, 52, 3, 83, 80, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66],
   ].map((bytes) => Uint8Array.from(bytes));
+  const boardPayloadWithTrailingByte = [...inScopeReplies[3].slice(5, -1), 0];
+  let boardChecksum = boardPayloadWithTrailingByte.length ^ 4;
+  for (const byte of boardPayloadWithTrailingByte) boardChecksum ^= byte;
+  const boardTrailingPayloadReply = Uint8Array.from([
+    36, 77, 62, boardPayloadWithTrailingByte.length, 4,
+    ...boardPayloadWithTrailingByte, boardChecksum,
+  ]);
   const replies = scenario === "scope-mismatch"
     ? [Uint8Array.from([36, 77, 62, 3, 1, 0, 1, 45, 46]), ...inScopeReplies.slice(1)]
-    : inScopeReplies;
+    : scenario === "protocol-identity-failure"
+      ? [...inScopeReplies.slice(0, 3), boardTrailingPayloadReply]
+      : inScopeReplies;
 
   class FakePort {
     constructor() {
@@ -368,6 +377,20 @@ try {
     mismatch.fields.scopeMismatchField !== "msp_api_version" || mismatch.closeCount !== 1
   ) throw new Error(`PRODUCTION_SCOPE_MISMATCH_PROOF_FAILED:${JSON.stringify(mismatch)}`);
 
+  const typedFailure = await runScenario(
+    browser,
+    url,
+    "protocol-identity-failure",
+    "failed",
+  );
+  if (
+    JSON.stringify(typedFailure.writes) !== JSON.stringify(expectedRequests) ||
+    typedFailure.fields.failure !== "ProtocolIdentityFailure" ||
+    typedFailure.fields.failureStage !== "BOARD_INFO" ||
+    typedFailure.fields.failureReason !== "TrailingPayload" ||
+    typedFailure.closeCount !== 1
+  ) throw new Error(`PRODUCTION_TYPED_DIAGNOSTIC_PROOF_FAILED:${JSON.stringify(typedFailure)}`);
+
   const cancelled = await runScenario(browser, url, "cancelled", "cancelled");
   if (cancelled.requestCount !== 1 || cancelled.writes.length !== 0 || cancelled.openCount !== 0) {
     throw new Error(`PRODUCTION_CANCELLED_PROOF_FAILED:${JSON.stringify(cancelled)}`);
@@ -377,7 +400,7 @@ try {
     throw new Error(`PRODUCTION_UNAVAILABLE_PROOF_FAILED:${JSON.stringify(unavailable)}`);
   }
 
-  for (const run of [success, mismatch, cancelled, unavailable]) {
+  for (const run of [success, mismatch, typedFailure, cancelled, unavailable]) {
     if (/hardwareObserved|serial.?number|usbVendorId|usbProductId|COM\d/i.test(run.text)) {
       throw new Error("PRODUCTION_UI_PRIVACY_BOUNDARY_FAILED");
     }

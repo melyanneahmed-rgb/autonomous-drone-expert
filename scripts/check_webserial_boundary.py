@@ -78,6 +78,8 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
         "exchange-identification-read",
         "acceptReadChunk",
         "acceptExchangeFailure",
+        "failureStage: discovery.failureStage ?? undefined",
+        "failureReason: discovery.failureReason ?? undefined",
         "releaseLock",
         "close",
     )
@@ -139,6 +141,8 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
             "const selection = await this.#host.selectPortFromUserGesture()",
             "await this.#host.discover()",
             "result.hardwareObserved !== false",
+            "failureStage: result.failureStage",
+            "failureReason: result.failureReason",
         )
         for marker in required_facade:
             if marker not in facade:
@@ -181,7 +185,8 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
             r"\b(?:MSP_[A-Z0-9_]+|CommandId|WriteApproval|TransportEffect|SerialPort|"
             r"sendRaw|writeRaw|commandId|payload)\b",
             r"\b(?:localStorage|sessionStorage|indexedDB)\b|document\.cookie",
-            r"serial.?number|usbVendorId|usbProductId|deviceId|raw.?frame|hardwareObserved",
+            r"serial.?number|usbVendorId|usbProductId|deviceId|raw.?frame|raw.?payload|"
+            r"board.?signature|\bUID\b|hardwareObserved",
         )
         for pattern in forbidden_app:
             if re.search(pattern, app, re.IGNORECASE):
@@ -224,11 +229,11 @@ def repository_errors(root: Path = ROOT) -> list[str]:
     adapter_path = root / ADAPTER
     declaration_path = root / DECLARATION
     if adapter_path.is_file() and hashlib.sha256(adapter_path.read_bytes()).hexdigest() != (
-        "a27c3f885ccff82041f85a7f6febc38ab80a9bac6a985320d4f49f68f0350973"
+        "b45009fac582e7c33f761c71ed58201c0fe2cf4b3d7587d6aae9aad1227b3309"
     ):
         errors.append("accepted production Web Serial host source drifted")
     if declaration_path.is_file() and hashlib.sha256(declaration_path.read_bytes()).hexdigest() != (
-        "6c16e032e9fbbad7ace75d6a29ecc83ff5d792f8198fa3cf55cb647e0a76ee61"
+        "03d6442a8a9b862e93857029c38a28c78c5cb56d2b8631dd12504a03bbfb9a01"
     ):
         errors.append("accepted production Web Serial host declaration drifted")
     errors.extend(verify_webserial_product_assets.verify(root=root))
