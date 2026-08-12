@@ -50,6 +50,11 @@ WASM name section. The generated files are derived build output and add no autho
 copies the same verified bytes to `dist/wasm/`, and the same-origin service worker precaches
 only those exact two bridge assets.
 
+The pre-generation Rust WASM file is an unpublished intermediate whose SHA-256 is reported for
+each trusted build, not claimed as a cross-host-stable artifact. Its host-specific metadata is
+discarded by the pinned generator. Reproducibility is enforced on both committed product outputs,
+along with exact source, manifest, toolchain, generator source and generator lock provenance.
+
 No npm package, Rust runtime dependency, GitHub Action, CDN, or hosted runtime script is added.
 
 ## Windows owner launch procedure (after PR approval only)

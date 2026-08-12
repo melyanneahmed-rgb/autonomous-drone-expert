@@ -98,14 +98,19 @@ def verify(
         errors.append("product WASM target drifted")
     if source.get("deterministic_source_prefix") != "/source/":
         errors.append("product WASM deterministic source prefix drifted")
-    input_sha = source.get("input_wasm_sha256")
-    if not isinstance(input_sha, str) or not HEX_SHA256.fullmatch(input_sha):
-        errors.append("input_wasm_sha256 must be lowercase SHA-256")
-    elif input_wasm is not None:
+    if source.get("input_wasm_hash_policy") != (
+        "reported-per-trusted-build-not-cross-host-locked"
+    ):
+        errors.append("raw input WASM hash policy drifted")
+    if source.get("input_wasm_published") is not False:
+        errors.append("raw input WASM must remain an unpublished intermediate")
+    if "input_wasm_sha256" in source:
+        errors.append("host-specific raw input WASM must not claim a cross-host hash lock")
+    if input_wasm is not None:
         if not input_wasm.is_file():
             errors.append(f"canonical input WASM is missing: {input_wasm}")
-        elif sha256(input_wasm) != input_sha:
-            errors.append("canonical input WASM SHA-256 drift")
+        elif input_wasm.read_bytes()[:8] != b"\0asm\x01\0\0\0":
+            errors.append("canonical input WASM is not a version-1 WebAssembly module")
     errors.extend(_check_record(root, source.get("manifest"), "source.manifest"))
     errors.extend(_check_record(root, source.get("rust_source"), "source.rust_source"))
 
@@ -194,7 +199,12 @@ def main() -> int:
             print(f"  - {error}")
         return 1
     suffix = " + byte-for-byte regeneration" if args.generated_dir else ""
-    print(f"web serial product asset provenance gate passed{suffix}")
+    input_evidence = (
+        f"; trusted-build raw input SHA-256={sha256(args.input_wasm)}"
+        if args.input_wasm is not None and args.input_wasm.is_file()
+        else ""
+    )
+    print(f"web serial product asset provenance gate passed{suffix}{input_evidence}")
     return 0
 
 

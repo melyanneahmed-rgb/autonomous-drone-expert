@@ -17,7 +17,8 @@
     "build_toolchain": "1.85.0",
     "target": "wasm32-unknown-unknown",
     "deterministic_source_prefix": "/source/",
-    "input_wasm_sha256": "64ef587ffa2494bece1f06787cb181486d26781af201607f41401b138a5d8a01"
+    "input_wasm_hash_policy": "reported-per-trusted-build-not-cross-host-locked",
+    "input_wasm_published": false
   },
   "generator": {
     "package": "wasm-bindgen-cli-support",
