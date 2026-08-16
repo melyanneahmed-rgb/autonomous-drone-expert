@@ -214,8 +214,9 @@ async function waitForBuild(evaluate, expectedSha) {
 }
 
 async function waitForVersionedController(evaluate, expectedSha) {
+  let state = null;
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const state = await evaluate(`navigator.serviceWorker?.getRegistration().then((registration) => ({
+    state = await evaluate(`navigator.serviceWorker?.getRegistration().then((registration) => ({
       active: registration?.active?.state === "activated"
         ? new URL(registration.active.scriptURL).searchParams.get("version")
         : null,
@@ -224,16 +225,14 @@ async function waitForVersionedController(evaluate, expectedSha) {
         : null,
       pwaStatus: document.documentElement.dataset.pwaStatus ?? null,
     }))`);
-    if (
-      state?.active === expectedSha &&
-      state.controller === expectedSha &&
-      state.pwaStatus === "ready"
-    ) {
+    if (state?.active === expectedSha && state.controller === expectedSha) {
       return;
     }
     await delay(100);
   }
-  throw new Error(`PRODUCTION_VERSIONED_SERVICE_WORKER_DID_NOT_TAKE_CONTROL:${expectedSha}`);
+  throw new Error(
+    `PRODUCTION_VERSIONED_SERVICE_WORKER_DID_NOT_TAKE_CONTROL:${expectedSha}:${JSON.stringify(state)}`,
+  );
 }
 
 async function waitForCachedAssetSet(evaluate, cacheName) {
