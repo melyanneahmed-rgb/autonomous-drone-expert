@@ -53,9 +53,11 @@ The checkout has credential persistence disabled. The Web build job has `actions
 
 ## Selected GitHub Actions policy
 
-The repository permits only an explicit selected-action set. `policy/github-actions-allowlist.json` is the machine-readable source for the exact official action release tags required by canonical CI and the two owner-controlled delivery workflows. The delivery contract tests require every external `uses:` reference to be in that set and require the set to contain no unused entry.
+The repository permits only an explicit selected-action set. `policy/github-actions-allowlist.json` separates the six immutable full-SHA references required by the owner-controlled delivery workflows from one temporary, explicitly scoped canonical-CI exception: `actions/checkout@v7.0.1`.
 
-The repository Actions setting must match this exact list. A mismatch fails at workflow startup before checkout, builds, artifact upload, or deployment; enabling all marketplace actions is neither required nor intended.
+Delivery contract tests require every Web Preview and Android `uses:` reference to be a full 40-character SHA, require the delivery set to contain no unused entry, and fail if the canonical-CI tag appears in either delivery workflow. The canonical CI workflow is likewise constrained to the single declared exception so the tag cannot silently spread.
+
+The repository Actions setting must eventually match this exact selected set. A mismatch fails at workflow startup before checkout, builds, artifact upload, or deployment; enabling all marketplace actions is neither required nor intended. Converting the canonical CI checkout tag to a reviewed immutable SHA remains a separate follow-up and is not part of this delivery correction.
 
 ## Pages availability and confidentiality boundary
 
