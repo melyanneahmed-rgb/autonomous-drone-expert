@@ -90,6 +90,10 @@ export function registerPwa(): void {
       const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
       const workerUrl = new URL("sw.js", baseUrl);
       workerUrl.searchParams.set("version", __ADE_BUILD_SHA__);
+      const existingRegistration = await navigator.serviceWorker.getRegistration(baseUrl.href);
+      if (existingRegistration && !workerHasBuild(existingRegistration.active)) {
+        await existingRegistration.unregister();
+      }
       const registration = await navigator.serviceWorker.register(workerUrl, {
         scope: baseUrl.pathname,
         updateViaCache: "none",
