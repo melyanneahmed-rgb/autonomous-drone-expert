@@ -19,6 +19,13 @@
           `WEB_SERIAL_READONLY_BROWSER_FAIL:UnhandledRejection:${String(event.reason)}`;
       });
     </script>
-    <script src="/webserial-readonly-smoke.mjs" type="module"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "virtual:ade-web-readonly-serial-wasm": "./wasm/ade_web_readonly_serial_wasm_bridge.js"
+        }
+      }
+    </script>
+    <script src="./webserial-readonly-smoke.mjs" type="module"></script>
   </body>
 </html>

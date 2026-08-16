@@ -15,7 +15,7 @@ function assertFailure(result, expected) {
 
 async function runSmoke() {
   mark("import");
-  const { IndexedDbJournalStore } = await import("/adapter.js");
+  const { IndexedDbJournalStore } = await import("./adapter.js");
   const mainKey = "browser-smoke-main";
   const raceKey = "browser-smoke-race";
   const absentKey = "browser-smoke-absent";

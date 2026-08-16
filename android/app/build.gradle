@@ -1,0 +1,35 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "app.autonomousdroneexpert.validation"
+    compileSdk 36
+    buildToolsVersion "36.0.0"
+
+    defaultConfig {
+        applicationId "app.autonomousdroneexpert.validation"
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName "0.1.0-validation"
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation("com.google.androidbrowserhelper:androidbrowserhelper:2.7.2") {
+        because "Official thin Trusted Web Activity launcher with Custom Tab fallback"
+    }
+}

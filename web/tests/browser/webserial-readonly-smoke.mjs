@@ -1,7 +1,7 @@
-import { WebSerialReadonlyHost } from "/webserial-readonly-host.mjs";
+import { WebSerialReadonlyHost } from "./webserial-readonly-host.mjs";
 import initWasm, {
   WasmReadonlySerialDiscovery,
-} from "/wasm/ade_web_readonly_serial_wasm_bridge.js";
+} from "virtual:ade-web-readonly-serial-wasm";
 
 // Static, project-owned test fixtures. Production JavaScript has no MSP command constants,
 // semantic parser, frame builder, or response fixtures.
@@ -292,7 +292,7 @@ async function scenarioHScopeMismatch() {
 async function run() {
   await initWasm({
     module_or_path: new URL(
-      "/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+      "./wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
       globalThis.location.href,
     ),
   });

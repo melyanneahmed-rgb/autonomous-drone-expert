@@ -19,6 +19,18 @@ const glueJs = path.join(glueRoot, "ade_web_storage_wasm_bridge.js");
 const glueWasm = path.join(glueRoot, "ade_web_storage_wasm_bridge_bg.wasm");
 const servedRequests = [];
 
+function normalizedBasePath(value = "/") {
+  const candidate = value.trim();
+  if (!candidate.startsWith("/") || /[?#]/.test(candidate)) {
+    throw new Error("BASE_PATH_MUST_BE_ABSOLUTE");
+  }
+  const withoutTrailingSlash = candidate.replace(/\/+$/, "");
+  return withoutTrailingSlash ? `${withoutTrailingSlash}/` : "/";
+}
+
+const basePath = normalizedBasePath(process.argv[3]);
+const route = (relative = "") => `${basePath}${relative}`;
+
 for (const required of [glueJs, glueWasm]) {
   if (!fs.existsSync(required)) {
     console.error(`STORAGE_WASM_GLUE_MISSING:${required}`);
@@ -63,28 +75,28 @@ function findBrowser() {
 
 function serve(adapterSource) {
   const routes = new Map([
-    ["/", ["text/html; charset=utf-8", fs.readFileSync(path.join(browserRoot, "storage-wasm-smoke.html"))]],
-    ["/storage-wasm-smoke.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(path.join(browserRoot, "storage-wasm-smoke.mjs"))]],
-    ["/adapter.js", ["text/javascript; charset=utf-8", Buffer.from(adapterSource)]],
-    ["/journal-storage-contract.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(contractPath)]],
-    ["/wasm-journal-host.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(hostPath)]],
-    ["/wasm/ade_web_storage_wasm_bridge.js", ["text/javascript; charset=utf-8", fs.readFileSync(glueJs)]],
-    ["/wasm/ade_web_storage_wasm_bridge_bg.wasm", ["application/wasm", fs.readFileSync(glueWasm)]],
+    [route(), ["text/html; charset=utf-8", fs.readFileSync(path.join(browserRoot, "storage-wasm-smoke.html"))]],
+    [route("storage-wasm-smoke.mjs"), ["text/javascript; charset=utf-8", fs.readFileSync(path.join(browserRoot, "storage-wasm-smoke.mjs"))]],
+    [route("adapter.js"), ["text/javascript; charset=utf-8", Buffer.from(adapterSource)]],
+    [route("journal-storage-contract.mjs"), ["text/javascript; charset=utf-8", fs.readFileSync(contractPath)]],
+    [route("wasm-journal-host.mjs"), ["text/javascript; charset=utf-8", fs.readFileSync(hostPath)]],
+    [route("wasm/ade_web_storage_wasm_bridge.js"), ["text/javascript; charset=utf-8", fs.readFileSync(glueJs)]],
+    [route("wasm/ade_web_storage_wasm_bridge_bg.wasm"), ["application/wasm", fs.readFileSync(glueWasm)]],
   ]);
   return http.createServer((request, response) => {
     servedRequests.push(request.url);
-    const route = routes.get(request.url);
-    if (!route) {
-      response.writeHead(request.url === "/favicon.ico" ? 204 : 404);
+    const selectedRoute = routes.get(request.url);
+    if (!selectedRoute) {
+      response.writeHead(request.url === route("favicon.ico") ? 204 : 404);
       response.end();
       return;
     }
     response.writeHead(200, {
-      "Content-Type": route[0],
+      "Content-Type": selectedRoute[0],
       "Cache-Control": "no-store",
       "Cross-Origin-Resource-Policy": "same-origin",
     });
-    response.end(route[1]);
+    response.end(selectedRoute[1]);
   });
 }
 
@@ -224,8 +236,8 @@ const profile = await mkdtemp(path.join(os.tmpdir(), "ade-storage-wasm-smoke-"))
 const server = serve(await transpileAdapter());
 try {
   const port = await listen(server);
-  const result = await runBrowser(browser, `http://127.0.0.1:${port}/`, profile);
-  const wasmFetched = servedRequests.includes("/wasm/ade_web_storage_wasm_bridge_bg.wasm");
+  const result = await runBrowser(browser, `http://127.0.0.1:${port}${basePath}`, profile);
+  const wasmFetched = servedRequests.includes(route("wasm/ade_web_storage_wasm_bridge_bg.wasm"));
   if (
     result.state !== "pass" ||
     result.output !== "STORAGE_WASM_BROWSER_PASS:A+B+C+D+E" ||

@@ -24,6 +24,8 @@ def product_sources(root: Path = ROOT) -> dict[PurePosixPath, str]:
         if not directory.is_dir():
             continue
         for path in sorted(candidate for candidate in directory.rglob("*") if candidate.is_file()):
+            if path.is_relative_to(root / "web" / "public" / "wasm"):
+                continue
             files[PurePosixPath(path.relative_to(root).as_posix())] = path.read_text(
                 encoding="utf-8"
             )
@@ -66,7 +68,7 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
         if marker not in adapter:
             errors.append(f"designated adapter is missing required bounded behavior: {marker}")
 
-    binding_module = "/wasm/ade_web_readonly_serial_wasm_bridge.js"
+    binding_module = "virtual:ade-web-readonly-serial-wasm"
     import_match = re.search(
         rf'import\s*\{{(?P<names>[^}}]+)\}}\s*from\s*["\']{re.escape(binding_module)}["\']',
         adapter,

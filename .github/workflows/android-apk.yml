@@ -1,0 +1,177 @@
+name: Android APK Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact repository commit SHA, branch, or tag to validate and package
+        required: true
+        default: main
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  validate-apk:
+    name: Build development validation APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout explicit source ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve exact source commit
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "${#source_sha}" = 40
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${source_sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful canonical CI for exact commit
+        id: ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/require_successful_ci.py "${{ steps.source.outputs.source_sha }}"
+
+      - name: Install audited Web package without lifecycle scripts
+        working-directory: web
+        run: npx --yes npm@11.13.0 ci --ignore-scripts --no-fund
+
+      - name: Validate audited Web and PWA source
+        working-directory: web
+        run: |
+          npx --yes npm@11.13.0 run typecheck
+          npx --yes npm@11.13.0 test
+
+      - name: Install product MSRV with browser target
+        run: rustup toolchain install 1.85.0 --profile minimal --target wasm32-unknown-unknown
+
+      - name: Build and stage same-origin Rust WASM bridges
+        run: |
+          cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
+          cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
+          mkdir -p target/storage-wasm-web target/webserial-wasm-web
+          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+            target/wasm32-unknown-unknown/release/ade_web_storage_wasm_bridge.wasm \
+            target/storage-wasm-web
+          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+            target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            target/webserial-wasm-web
+          python3 scripts/prepare_web_wasm.py
+
+      - name: Exercise repository-subpath PWA, IndexedDB, Web Serial, and WASM
+        working-directory: web
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          node --experimental-websocket tests/indexeddb-browser-smoke.mjs /autonomous-drone-expert/
+          node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web /autonomous-drone-expert/
+          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web /autonomous-drone-expert/
+          ADE_WEB_BASE_PATH=/autonomous-drone-expert/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
+          node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
+            dist /autonomous-drone-expert/ "$SOURCE_SHA"
+
+      - name: Prove packaged PWA contains no private material
+        run: python3 scripts/check_public_web_artifact.py web/dist
+
+      - name: Validate Android authority and dependency policy
+        run: python3 scripts/check_android_validation.py
+
+      - name: Set up exact Java toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17.0.20+8"
+          check-latest: false
+
+      - name: Download checksum-verified Gradle distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://services.gradle.org/distributions/gradle-9.4.1-bin.zip \
+            --output "$RUNNER_TEMP/gradle-9.4.1-bin.zip"
+          echo "2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb  $RUNNER_TEMP/gradle-9.4.1-bin.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/gradle-9.4.1-bin.zip" -d "$RUNNER_TEMP"
+          "$RUNNER_TEMP/gradle-9.4.1/bin/gradle" --version
+
+      - name: Compile debug validation APK from strict lock and checksums
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/gradle-user-home
+        run: |
+          "$RUNNER_TEMP/gradle-9.4.1/bin/gradle" \
+            --project-dir android \
+            assembleDebug \
+            --dependency-verification strict \
+            --no-daemon \
+            --stacktrace
+
+      - name: Verify, name, and hash development APK
+        id: apk
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          source_apk=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$source_apk"
+          apk_name="smart-configurator-validation-${SOURCE_SHA:0:12}-debug.apk"
+          install -m 0644 "$source_apk" "$RUNNER_TEMP/$apk_name"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$RUNNER_TEMP/$apk_name"
+          apk_sha256="$(sha256sum "$RUNNER_TEMP/$apk_name" | cut -d ' ' -f1)"
+          echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
+          echo "apk_path=$RUNNER_TEMP/$apk_name" >> "$GITHUB_OUTPUT"
+          echo "apk_sha256=$apk_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload development validation APK
+        id: artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smart-configurator-validation-${{ steps.source.outputs.short_sha }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Write APK validation summary
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          TREE_SHA: ${{ steps.ci.outputs.tree_sha }}
+          CI_RUN_URL: ${{ steps.ci.outputs.ci_run_url }}
+          APK_NAME: ${{ steps.apk.outputs.apk_name }}
+          APK_SHA256: ${{ steps.apk.outputs.apk_sha256 }}
+          ARTIFACT_NAME: smart-configurator-validation-${{ steps.source.outputs.short_sha }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Android APK packaging validation"
+            echo "- Repository: \`${{ github.repository }}\`"
+            echo "- Workflow: \`${{ github.workflow }}\`"
+            echo "- Source ref: \`$SOURCE_REF\`"
+            echo "- Commit SHA: \`$SOURCE_SHA\`"
+            echo "- Tree SHA: \`$TREE_SHA\`"
+            echo "- Build timestamp (UTC): \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\`"
+            echo "- Canonical CI: $CI_RUN_URL"
+            echo "- Java: Temurin 17.0.20+8"
+            echo "- Gradle: 9.4.1 (checksum verified)"
+            echo "- Android Gradle Plugin: 9.2.1"
+            echo "- Android Browser Helper: 2.7.2"
+            echo "- Web/PWA source and browser tests: passed"
+            echo "- Android debug build result: passed"
+            echo "- APK: \`$APK_NAME\`"
+            echo "- APK SHA-256: \`$APK_SHA256\`"
+            echo "- Artifact: [$ARTIFACT_NAME]($ARTIFACT_URL)"
+            echo "- Status: DEVELOPMENT / VALIDATION — NOT PRODUCTION SIGNED"
+            echo "- Android USB flight-controller support: NOT VALIDATED"
+            echo "- TWA Digital Asset Links verification: NOT CLAIMED; Custom Tab fallback remains enabled"
+          } >> "$GITHUB_STEP_SUMMARY"

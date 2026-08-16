@@ -1,7 +1,7 @@
 import {
   WasmReadonlySerialDirective,
   WasmReadonlySerialDiscovery,
-} from "/wasm/ade_web_readonly_serial_wasm_bridge.js";
+} from "virtual:ade-web-readonly-serial-wasm";
 
 const INITIAL_MSP_BAUD_RATE = 115200;
 const DEFAULT_EXCHANGE_TIMEOUT_MS = 1500;

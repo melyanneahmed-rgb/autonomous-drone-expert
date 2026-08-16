@@ -1,0 +1,209 @@
+name: Web Preview (GitHub Pages)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact repository commit SHA, branch, or tag to validate and deploy
+        required: true
+        default: main
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate exact Web artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      tree_sha: ${{ steps.ci.outputs.tree_sha }}
+      ci_run_id: ${{ steps.ci.outputs.ci_run_id }}
+      ci_run_url: ${{ steps.ci.outputs.ci_run_url }}
+      artifact_sha256: ${{ steps.artifact.outputs.sha256 }}
+    steps:
+      - name: Checkout explicit source ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve exact source commit
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse --is-shallow-repository)" = "true"
+          test "${#source_sha}" = 40
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${source_sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful canonical CI for exact commit
+        id: ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/require_successful_ci.py "${{ steps.source.outputs.source_sha }}"
+
+      - name: Prove runner Node compatibility
+        run: |
+          node --version
+          npm --version
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!((major === 20 && minor >= 19) || major >= 22)) process.exit(1)'
+
+      - name: Install audited Web package without lifecycle scripts
+        working-directory: web
+        run: npx --yes npm@11.13.0 ci --ignore-scripts --no-fund
+
+      - name: Type, source, PWA, base-path and workflow contracts
+        working-directory: web
+        run: |
+          npx --yes npm@11.13.0 run typecheck
+          npx --yes npm@11.13.0 test
+
+      - name: Install product MSRV with browser target
+        run: rustup toolchain install 1.85.0 --profile minimal --target wasm32-unknown-unknown
+
+      - name: Build audited Rust WASM bridges
+        run: |
+          cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
+          cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
+          mkdir -p target/storage-wasm-web target/webserial-wasm-web
+          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+            target/wasm32-unknown-unknown/release/ade_web_storage_wasm_bridge.wasm \
+            target/storage-wasm-web
+          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+            target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            target/webserial-wasm-web
+          python3 scripts/prepare_web_wasm.py
+
+      - name: Exercise existing browser storage and Web Serial gates at both scopes
+        working-directory: web
+        run: |
+          node --experimental-websocket tests/indexeddb-browser-smoke.mjs /
+          node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web /
+          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web /
+          node --experimental-websocket tests/indexeddb-browser-smoke.mjs /autonomous-drone-expert/
+          node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web /autonomous-drone-expert/
+          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web /autonomous-drone-expert/
+
+      - name: Exercise root production build, offline shell, and update transition
+        working-directory: web
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          old_sha=0000000000000000000000000000000000000000
+          ADE_WEB_BASE_PATH=/ ADE_BUILD_SHA="$old_sha" npx --yes npm@11.13.0 run build
+          cp -R dist "$RUNNER_TEMP/web-root-old"
+          ADE_WEB_BASE_PATH=/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
+          node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
+            dist / "$SOURCE_SHA" "$RUNNER_TEMP/web-root-old" "$old_sha"
+
+      - name: Exercise repository-subpath production build, offline shell, and update transition
+        working-directory: web
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          old_sha=0000000000000000000000000000000000000000
+          ADE_WEB_BASE_PATH=/autonomous-drone-expert/ ADE_BUILD_SHA="$old_sha" npx --yes npm@11.13.0 run build
+          cp -R dist "$RUNNER_TEMP/web-subpath-old"
+          ADE_WEB_BASE_PATH=/autonomous-drone-expert/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
+          node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
+            dist /autonomous-drone-expert/ "$SOURCE_SHA" "$RUNNER_TEMP/web-subpath-old" "$old_sha"
+
+      - name: Security audit and immutable dependency proof
+        run: |
+          cd web
+          npx --yes npm@11.13.0 audit --audit-level=high
+          cd ..
+          git diff --exit-code -- web/package.json web/package-lock.json policy/web-dependencies.json
+
+      - name: Public Pages artifact privacy gate
+        run: python3 scripts/check_public_web_artifact.py web/dist
+
+      - name: Hash exact validated Pages directory
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(python3 scripts/hash_directory.py web/dist)"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact GitHub Pages artifact
+        id: pages_artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: web/dist
+
+      - name: Write validation summary
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          TREE_SHA: ${{ steps.ci.outputs.tree_sha }}
+          CI_RUN_URL: ${{ steps.ci.outputs.ci_run_url }}
+          ARTIFACT_SHA: ${{ steps.artifact.outputs.sha256 }}
+        run: |
+          {
+            echo "## Web Preview validation"
+            echo "- Repository: \`${{ github.repository }}\`"
+            echo "- Workflow: \`${{ github.workflow }}\`"
+            echo "- Source ref: \`$SOURCE_REF\`"
+            echo "- Commit SHA: \`$SOURCE_SHA\`"
+            echo "- Tree SHA: \`$TREE_SHA\`"
+            echo "- Build timestamp (UTC): \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\`"
+            echo "- Tools: npm 11.13.0; Vite 8.2.1; Rust 1.85.0; wasm-bindgen 0.2.127"
+            echo "- Canonical CI: $CI_RUN_URL"
+            echo "- Build result: passed"
+            echo "- Root and repository-subpath browser tests: passed"
+            echo "- WASM, IndexedDB, PWA offline/update tests: passed"
+            echo "- Validated Pages directory SHA-256: \`$ARTIFACT_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy exact validated artifact
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Deploy the validated Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+      - name: Write deployment summary
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          TREE_SHA: ${{ needs.validate.outputs.tree_sha }}
+          ARTIFACT_SHA: ${{ needs.validate.outputs.artifact_sha256 }}
+        run: |
+          {
+            echo "## Web Preview deployment"
+            echo "- Repository: \`${{ github.repository }}\`"
+            echo "- Workflow: \`${{ github.workflow }}\`"
+            echo "- Source ref: \`$SOURCE_REF\`"
+            echo "- Deployment result: passed"
+            echo "- Pages URL: $PAGE_URL"
+            echo "- Commit SHA: \`$SOURCE_SHA\`"
+            echo "- Tree SHA: \`$TREE_SHA\`"
+            echo "- Validated directory SHA-256: \`$ARTIFACT_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
