@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout explicit source ref
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.source_ref }}
           fetch-depth: 1
@@ -87,7 +87,7 @@ jobs:
         run: python3 scripts/check_android_validation.py
 
       - name: Set up exact Java toolchain
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        uses: actions/setup-java@v5.7.0
         with:
           distribution: temurin
           java-version: "17.0.20+8"
@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload development validation APK
         id: artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: smart-configurator-validation-${{ steps.source.outputs.short_sha }}
           path: ${{ steps.apk.outputs.apk_path }}
