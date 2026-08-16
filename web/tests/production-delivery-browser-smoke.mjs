@@ -213,12 +213,27 @@ async function waitForBuild(evaluate, expectedSha) {
   throw new Error(`PRODUCTION_APP_INITIALIZATION_TIMEOUT:${expectedSha}`);
 }
 
-async function waitForController(evaluate) {
+async function waitForVersionedController(evaluate, expectedSha) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (await evaluate(`Boolean(navigator.serviceWorker?.controller)`)) return;
+    const state = await evaluate(`navigator.serviceWorker?.getRegistration().then((registration) => ({
+      active: registration?.active?.state === "activated"
+        ? new URL(registration.active.scriptURL).searchParams.get("version")
+        : null,
+      controller: navigator.serviceWorker.controller
+        ? new URL(navigator.serviceWorker.controller.scriptURL).searchParams.get("version")
+        : null,
+      pwaStatus: document.documentElement.dataset.pwaStatus ?? null,
+    }))`);
+    if (
+      state?.active === expectedSha &&
+      state.controller === expectedSha &&
+      state.pwaStatus === "ready"
+    ) {
+      return;
+    }
     await delay(100);
   }
-  throw new Error("PRODUCTION_SERVICE_WORKER_DID_NOT_TAKE_CONTROL");
+  throw new Error(`PRODUCTION_VERSIONED_SERVICE_WORKER_DID_NOT_TAKE_CONTROL:${expectedSha}`);
 }
 
 async function waitForCachedAssetSet(evaluate, cacheName) {
@@ -311,7 +326,7 @@ try {
 
   const initialSha = previousSha ?? currentSha;
   await waitForBuild(launched.control.evaluate, initialSha);
-  await waitForController(launched.control.evaluate);
+  await waitForVersionedController(launched.control.evaluate, initialSha);
   const online = await inspect(launched.control.evaluate);
   requireInspection(online, origin, initialSha);
   await waitForCachedAssetSet(
@@ -332,7 +347,7 @@ try {
     served.state.dist = currentDist;
     await launched.control.send("Page.navigate", { url: `${pageUrl}?commit=${currentSha}` });
     await waitForBuild(launched.control.evaluate, currentSha);
-    await waitForController(launched.control.evaluate);
+    await waitForVersionedController(launched.control.evaluate, currentSha);
     updated = await inspect(launched.control.evaluate);
     requireInspection(updated, origin, currentSha);
     for (let attempt = 0; attempt < 100; attempt += 1) {
