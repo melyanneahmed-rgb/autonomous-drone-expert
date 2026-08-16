@@ -5,9 +5,23 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
+const actionAllowlist = new Set(
+  JSON.parse(
+    fs.readFileSync(
+      path.join(repositoryRoot, "policy", "github-actions-allowlist.json"),
+      "utf8",
+    ),
+  ).allowed_actions,
+);
 
 function workflow(name) {
   return fs.readFileSync(path.join(repositoryRoot, ".github", "workflows", name), "utf8");
+}
+
+function actionReferences(source) {
+  return [...source.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s*#.*)?$/gm)].map(
+    (match) => match[1],
+  );
 }
 
 function assertManualOnly(source) {
@@ -17,18 +31,27 @@ function assertManualOnly(source) {
   assert.doesNotMatch(source, /pull_request_target/);
 }
 
-function assertPinnedActions(source) {
-  const uses = [...source.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s*#.*)?$/gm)].map((match) => match[1]);
+function assertAllowedActions(source) {
+  const uses = actionReferences(source);
   assert.ok(uses.length > 0);
   for (const reference of uses) {
-    assert.match(reference, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[0-9a-f]{40}$/);
+    assert.match(reference, /^actions\/[A-Za-z0-9_.-]+@v\d+\.\d+\.\d+$/);
+    assert.ok(actionAllowlist.has(reference), `unexpected action reference: ${reference}`);
   }
 }
 
-test("Web Preview remains manual, fail-closed, immutable, and minimally privileged", () => {
+test("delivery workflows use exactly the declared selected-action allowlist", () => {
+  const references = new Set([
+    ...actionReferences(workflow("web-preview.yml")),
+    ...actionReferences(workflow("android-apk.yml")),
+  ]);
+  assert.deepEqual([...references].sort(), [...actionAllowlist].sort());
+});
+
+test("Web Preview remains manual, fail-closed, allowlisted, and minimally privileged", () => {
   const source = workflow("web-preview.yml");
   assertManualOnly(source);
-  assertPinnedActions(source);
+  assertAllowedActions(source);
   assert.match(source, /^permissions:\n  actions: read\n  contents: read$/m);
   assert.match(source, /^    permissions:\n      pages: write\n      id-token: write$/m);
   assert.equal((source.match(/pages: write/g) ?? []).length, 1);
@@ -46,7 +69,7 @@ test("Web Preview remains manual, fail-closed, immutable, and minimally privileg
 test("Android APK remains manual, read-only, hashed, and validation-only", () => {
   const source = workflow("android-apk.yml");
   assertManualOnly(source);
-  assertPinnedActions(source);
+  assertAllowedActions(source);
   assert.match(source, /^permissions:\n  actions: read\n  contents: read$/m);
   assert.doesNotMatch(source, /^\s+(?:pages|packages|deployments|pull-requests|id-token):\s*write$/m);
   assert.match(source, /scripts\/require_successful_ci\.py/);
