@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
+const expectedBuildSha = "1111111111111111111111111111111111111111";
 function filesBelow(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(directory, entry.name);
@@ -24,7 +25,7 @@ function buildAndInspect(basePath) {
       env: {
         ...process.env,
         ADE_WEB_BASE_PATH: basePath,
-        ADE_BUILD_SHA: "1111111111111111111111111111111111111111",
+        ADE_BUILD_SHA: expectedBuildSha,
       },
       shell: false,
     });
@@ -51,6 +52,9 @@ function buildAndInspect(basePath) {
     const manifest = JSON.parse(fs.readFileSync(path.join(dist, "manifest.webmanifest"), "utf8"));
     assert.equal(manifest.start_url, "./");
     assert.equal(manifest.scope, "./");
+    const worker = fs.readFileSync(path.join(dist, "sw.js"), "utf8");
+    assert.ok(worker.includes(`const EMBEDDED_BUILD_VERSION = "${expectedBuildSha}";`));
+    assert.doesNotMatch(worker, /__ADE_SERVICE_WORKER_BUILD_SHA__/);
     const text = files
       .filter((file) => !/\.(?:svg|ico|png|jpg|jpeg|gif)$/i.test(file))
       .map((file) => fs.readFileSync(file, "utf8"))

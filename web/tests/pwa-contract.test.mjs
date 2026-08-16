@@ -28,6 +28,8 @@ test("service worker is base-scoped, commit-versioned, GET-only, and update safe
   assert.match(register, /window\.location\.origin/);
   assert.match(worker, /request\.method !== "GET"/);
   assert.match(worker, /new URL\("\.\/", self\.registration\.scope\)/);
+  assert.match(worker, /EMBEDDED_BUILD_VERSION = "__ADE_SERVICE_WORKER_BUILD_SHA__"/);
+  assert.match(worker, /requestedVersion !== BUILD_VERSION/);
   assert.match(worker, /CACHE_NAME = `\$\{CACHE_PREFIX\}\$\{BUILD_VERSION\}`/);
   assert.match(worker, /relativePath\.startsWith\("wasm\/"\)/);
   assert.match(worker, /networkFirst\(request, APP_BASE_URL\.href\)/);

@@ -1,8 +1,15 @@
 const CACHE_PREFIX = "smart-configurator-shell-";
+const EMBEDDED_BUILD_VERSION = "__ADE_SERVICE_WORKER_BUILD_SHA__";
 const requestedVersion = new URL(self.location.href).searchParams.get("version");
-const BUILD_VERSION = /^[0-9a-f]{7,64}$/.test(requestedVersion ?? "")
+const BUILD_VERSION = EMBEDDED_BUILD_VERSION.startsWith("__ADE_SERVICE_WORKER_")
   ? requestedVersion
-  : "local-development";
+  : EMBEDDED_BUILD_VERSION;
+if (
+  !/^(?:[0-9a-f]{7,64}|local-development)$/.test(BUILD_VERSION ?? "") ||
+  requestedVersion !== BUILD_VERSION
+) {
+  throw new Error("SERVICE_WORKER_BUILD_VERSION_MISMATCH");
+}
 const CACHE_NAME = `${CACHE_PREFIX}${BUILD_VERSION}`;
 const APP_BASE_URL = new URL("./", self.registration.scope);
 const APP_SHELL = [
