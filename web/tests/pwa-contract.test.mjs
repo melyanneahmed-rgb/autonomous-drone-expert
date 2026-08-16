@@ -23,6 +23,8 @@ test("service worker is base-scoped, commit-versioned, GET-only, and update safe
   assert.match(register, /searchParams\.set\("version", __ADE_BUILD_SHA__\)/);
   assert.match(register, /scope: baseUrl\.pathname/);
   assert.match(register, /updateViaCache: "none"/);
+  assert.match(register, /getRegistration\(baseUrl\.href\)/);
+  assert.match(register, /existingRegistration\.unregister\(\)/);
   assert.match(register, /new MessageChannel\(\)/);
   assert.match(register, /CACHE_RESOURCES_COMPLETE/);
   assert.match(register, /window\.location\.origin/);
