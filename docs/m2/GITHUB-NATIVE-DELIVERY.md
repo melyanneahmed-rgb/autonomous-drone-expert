@@ -51,6 +51,12 @@ The production delivery test builds an old commit identity and a new commit iden
 
 The checkout has credential persistence disabled. The Web build job has `actions: read` and `contents: read`; only its dependent deployment job receives the officially required `pages: write` and `id-token: write`. The Android job has only `actions: read` and `contents: read`.
 
+## Selected GitHub Actions policy
+
+The repository permits only an explicit selected-action set. `policy/github-actions-allowlist.json` is the machine-readable source for the exact official action release tags required by canonical CI and the two owner-controlled delivery workflows. The delivery contract tests require every external `uses:` reference to be in that set and require the set to contain no unused entry.
+
+The repository Actions setting must match this exact list. A mismatch fails at workflow startup before checkout, builds, artifact upload, or deployment; enabling all marketplace actions is neither required nor intended.
+
 ## Pages availability and confidentiality boundary
 
 GitHub's current documentation makes plan and repository visibility relevant to Pages availability, and a Pages site may be publicly reachable even when its source repository is private. The GitHub integration used during implementation could read the private repository but received `403 Resource not accessible by integration` from the Pages API, so repository-specific Pages enablement cannot be truthfully pre-certified here. The first official deployment is the fail-closed availability check.
