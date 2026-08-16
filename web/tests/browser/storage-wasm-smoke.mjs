@@ -1,6 +1,6 @@
-import { IndexedDbJournalStore, JOURNAL_DATABASE_NAME, JOURNAL_DATABASE_VERSION, JOURNAL_OBJECT_STORE_NAME } from "/adapter.js";
-import { WasmJournalHost } from "/wasm-journal-host.mjs";
-import initWasm, { WasmJournalStore } from "/wasm/ade_web_storage_wasm_bridge.js";
+import { IndexedDbJournalStore, JOURNAL_DATABASE_NAME, JOURNAL_DATABASE_VERSION, JOURNAL_OBJECT_STORE_NAME } from "./adapter.js";
+import { WasmJournalHost } from "./wasm-journal-host.mjs";
+import initWasm, { WasmJournalStore } from "./wasm/ade_web_storage_wasm_bridge.js";
 
 // Fixed test-only ADEJ fixture: header plus one IdentityRead record. Production JavaScript
 // never constructs journal records or chooses JournalEvent values.
@@ -203,7 +203,7 @@ async function run() {
   mark("initialize-real-wasm");
   await initWasm({
     module_or_path: new URL(
-      "/wasm/ade_web_storage_wasm_bridge_bg.wasm",
+      "./wasm/ade_web_storage_wasm_bridge_bg.wasm",
       globalThis.location.href,
     ),
   });

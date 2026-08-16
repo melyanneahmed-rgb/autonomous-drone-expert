@@ -15,7 +15,11 @@ function sourceFiles(directory) {
 
 test("product surface keeps storage and read-only serial authority in designated adapters", () => {
   const files = [path.join(webRoot, "index.html"), ...sourceFiles(path.join(webRoot, "src")), ...sourceFiles(path.join(webRoot, "public"))]
-    .filter((file) => !file.endsWith("favicon.svg"));
+    .filter(
+      (file) =>
+        !file.endsWith("favicon.svg") &&
+        !file.startsWith(path.join(webRoot, "public", "wasm", path.sep)),
+    );
   const source = files.map((file) => fs.readFileSync(file, "utf8")).join("\n");
   const forbidden = [
     /navigator\s*\?*\.\s*(usb|hid|bluetooth)/i,
@@ -51,7 +55,11 @@ test("product surface keeps storage and read-only serial authority in designated
   const serialSource = fs.readFileSync(serialAdapter, "utf8");
   const serialTypes = fs.readFileSync(serialDeclaration, "utf8");
   assert.match(serialSource, /globalThis\.navigator\?\.serial/);
-  assert.match(serialSource, /from "\/wasm\/ade_web_readonly_serial_wasm_bridge\.js"/);
+  assert.match(serialSource, /from "virtual:ade-web-readonly-serial-wasm"/);
+  const vite = fs.readFileSync(path.join(webRoot, "vite.config.ts"), "utf8");
+  assert.match(vite, /ADE_WEB_BASE_PATH/);
+  assert.match(vite, /virtual:ade-web-readonly-serial-wasm/);
+  assert.match(vite, /`\$\{base\}wasm\/ade_web_readonly_serial_wasm_bridge\.js`/);
   assert.match(serialSource, /new WasmReadonlySerialDiscovery\(\)/);
   assert.match(serialSource, /instanceof WasmReadonlySerialDirective/);
   assert.match(serialSource, /async discover\(\)/);
@@ -70,6 +78,8 @@ test("the only network primitive is the guarded same-origin service worker fetch
     .join("\n");
   const worker = fs.readFileSync(path.join(webRoot, "public", "sw.js"), "utf8");
   assert.doesNotMatch(appSource, /\bfetch\s*\(/);
-  assert.match(worker, /url\.origin !== self\.location\.origin/);
+  assert.match(worker, /url\.origin === APP_BASE_URL\.origin/);
+  assert.match(worker, /url\.pathname\.startsWith\(APP_BASE_URL\.pathname\)/);
+  assert.match(worker, /if \(!isWithinScope\(url\)\) return/);
   assert.match(worker, /request\.method !== "GET"/);
 });
