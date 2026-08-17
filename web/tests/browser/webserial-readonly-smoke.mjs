@@ -135,7 +135,11 @@ class TestPort {
     }
     const reply = this.replies[this.attemptWrites - 1];
     if (reply) {
-      if (this.mode === "bad-checksum" && this.attemptWrites === 1) {
+      if (this.mode === "error-direction" && this.attemptWrites === 1) {
+        const errorReply = Uint8Array.from(reply);
+        errorReply[2] = 33;
+        this.queue.push(errorReply);
+      } else if (this.mode === "bad-checksum" && this.attemptWrites === 1) {
         const bad = Uint8Array.from(reply);
         bad[bad.length - 1] ^= 1;
         this.queue.push(bad);
@@ -302,13 +306,19 @@ async function scenarioCSuccessAndGCleanup() {
   const trace = assertPrivacyBoundedTrace(run.host, ["SPEEDYBEEF405V4", "BTFL"]);
   assert(trace.at(-1).event === "FINAL_OK", "success trace ends explicitly");
   assert(
+    trace.filter((event) => event.event === "RX_CHUNK").every((event) => !("direction" in event)),
+    "browser RX chunks do not invent MSP direction",
+  );
+  assert(
     trace.filter((event) => event.event === "DIRECTIVE").map((event) => event.command).join(",") ===
       "MSP_API_VERSION,MSP_FC_VARIANT,MSP_FC_VERSION,MSP_BOARD_INFO",
     "Rust emitted the exact four ordered commands",
   );
+  const acceptedFrames = trace.filter((event) => event.event === "FRAME_ACCEPTED");
+  assert(acceptedFrames.length === 4, "Rust accepted exactly four MSP frames");
   assert(
-    trace.filter((event) => event.event === "FRAME_ACCEPTED").length === 4,
-    "Rust accepted exactly four MSP frames",
+    acceptedFrames.every((event) => event.direction === "REPLY"),
+    "Rust authoritatively reports normal reply direction",
   );
   assert(
     trace.filter((event) => event.event === "IDENTITY_STAGE_OK").length === 4,
@@ -408,6 +418,7 @@ async function scenarioFFailClosed() {
     ["disconnect", "Disconnected", undefined, undefined],
     ["oversized", "MalformedResponse", "API_VERSION", "FrameTooLarge"],
     ["wrong-command", "MalformedResponse", "API_VERSION", "WrongCommand"],
+    ["error-direction", "ProtocolIdentityFailure", "API_VERSION", "ErrorReply"],
   ]) {
     const run = await runDiscovery(IN_SCOPE_REPLIES, mode, 15);
     assert(run.result.outcome === "failed", `${mode} failed`);
@@ -420,7 +431,9 @@ async function scenarioFFailClosed() {
           ? "SERIAL_TIMEOUT"
           : mode === "disconnect"
             ? "SERIAL_READ"
-            : "MSP_FRAME"),
+            : mode === "error-direction"
+              ? "IDENTITY_STAGE"
+              : "MSP_FRAME"),
       `${mode} fixed failure origin`,
     );
     assert(run.port.closeCount === 1, `${mode} closed`);
@@ -428,10 +441,23 @@ async function scenarioFFailClosed() {
     assert(run.port.writerReleased === 1, `${mode} writer released`);
     const trace = assertPrivacyBoundedTrace(run.host);
     assert(trace.at(-1).event === "FINAL_FAILED", `${mode} trace is terminal`);
-    if (reason) {
+    assert(
+      trace
+        .filter((event) => event.event === "RX_CHUNK" || event.event === "RX_FAILED")
+        .every((event) => !("direction" in event)),
+      `${mode} browser RX trace does not invent direction`,
+    );
+    if (reason && mode !== "error-direction") {
       const rejected = trace.find((event) => event.event === "FRAME_REJECTED");
       assert(rejected?.failureReason === reason, `${mode} Rust trace reason`);
       assert(rejected?.origin === "MSP_FRAME", `${mode} Rust trace origin`);
+    }
+    if (mode === "error-direction") {
+      const accepted = trace.find((event) => event.event === "FRAME_ACCEPTED");
+      assert(accepted?.direction === "ERROR", "Rust authoritatively reports error direction");
+      const identityFailure = trace.find((event) => event.event === "IDENTITY_STAGE_FAILED");
+      assert(identityFailure?.failureReason === "ErrorReply", "Rust classifies the error reply");
+      assert(identityFailure?.origin === "IDENTITY_STAGE", "Rust owns the error-reply origin");
     }
   }
 }
@@ -500,7 +526,17 @@ async function scenarioJStreamAndStageMatrix() {
     const run = await runDiscovery(IN_SCOPE_REPLIES, mode, 15);
     assert(run.result.outcome === "in-scope", `${mode} has the same typed result`);
     assert(run.port.writes.length === 4, `${mode} keeps four commands`);
-    assertPrivacyBoundedTrace(run.host);
+    const trace = assertPrivacyBoundedTrace(run.host);
+    assert(
+      trace.filter((event) => event.event === "RX_CHUNK").every((event) => !("direction" in event)),
+      `${mode} browser fragments do not invent direction`,
+    );
+    assert(
+      trace
+        .filter((event) => event.event === "FRAME_ACCEPTED")
+        .every((event) => event.direction === "REPLY"),
+      `${mode} preserves the authoritative Rust reply direction`,
+    );
   }
 
   for (const mode of ["trailing-bytes", "coalesced-frame"]) {
@@ -528,6 +564,7 @@ async function scenarioJStreamAndStageMatrix() {
       const trace = assertPrivacyBoundedTrace(run.host);
       const failedRead = trace.find((event) => event.event === "RX_FAILED");
       assert(failedRead?.stage === stages[stageIndex - 1], `${kind} trace stage`);
+      assert(!("direction" in failedRead), `${kind} RX failure has no invented direction`);
       assert(run.port.writes.length === stageIndex, `${kind} exact write count`);
     }
   }

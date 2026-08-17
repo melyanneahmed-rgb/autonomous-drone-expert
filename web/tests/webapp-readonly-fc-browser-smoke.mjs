@@ -431,7 +431,7 @@ try {
   if (
     !success.diagnostic.exists || !success.diagnostic.initiallyCollapsed ||
     success.diagnostic.traceCount === 0 || success.clearedCount !== 0 ||
-    !success.copiedText.startsWith("FPV_ARBCON_READONLY_DIAGNOSTIC_TRACE_V1\n") ||
+    !success.copiedText.startsWith("ADE_READONLY_DIAGNOSTIC_TRACE_V1\n") ||
     !success.diagnostic.traceLayers.includes("RUST") ||
     !success.diagnostic.traceLayers.includes("MSP") ||
     !success.diagnostic.traceEvents.some((event) => event.includes("FINAL_OK")) ||

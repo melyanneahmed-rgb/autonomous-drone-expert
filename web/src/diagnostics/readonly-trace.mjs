@@ -259,7 +259,7 @@ export function formatSafeDiagnosticTrace(events) {
     throw new TypeError("diagnostic trace snapshot must be an array");
   }
 
-  const lines = ["FPV_ARBCON_READONLY_DIAGNOSTIC_TRACE_V1"];
+  const lines = ["ADE_READONLY_DIAGNOSTIC_TRACE_V1"];
   for (const candidate of events) {
     if (!Number.isSafeInteger(candidate?.sequence) || candidate.sequence < 1) {
       throw new TypeError("diagnostic trace sequence is invalid");

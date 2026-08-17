@@ -4,8 +4,16 @@
 
 The reviewed path is `App` → prepared connection facade → `WebSerialReadonlyHost` → generated
 WASM → `WasmReadonlySerialDiscovery` → `ReadonlyIdentification` →
-`MspV1ResponseAccumulator` → cleanup. The review used the diagnostic child tree based on exact PR
-#18 head `3555a293d7b0ac785bdd040c2e401b7d24f64fcc`. It does not claim physical FC evidence.
+`MspV1ResponseAccumulator` → cleanup. PR #23 was merged into PR #18 as merge commit
+`fa92e5aaade68d962c74843f7dbae6325fe3db2c`, tree
+`8823a42a75a2a5f7b8db8b6c68e8acede51e63c7`. This correction is applied directly to the still
+Draft/open/unmerged PR #18 branch and does not claim physical FC evidence.
+
+At correction start, accepted `main` was
+`cea776b5c00444289eca95a255c0ec79d22eaaeb`, tree
+`a89a3cbdf4339960c872b731f7e884b14974cdbe`. The verified merge base was
+`8ef20be74a34912de53030d28d29b5e4108ddd08`; PR #18 was 21 commits ahead and 19 behind, with the
+11 overlapping paths enumerated in `PR18-MAIN-INTEGRATION-PLAN.md`.
 
 ## Authority review
 
@@ -51,6 +59,11 @@ wrong-command, wrong-direction, error-reply, timeout, and disconnect behavior. T
 disconnects are repeated at each of the four Rust stages. Sixty-four deterministic segmentation
 seeds produce the same four stage completions and final typed identity.
 
+The browser SERIAL layer now reports `RX_CHUNK` and `RX_FAILED` without `direction`. Normal and
+error-direction frames receive `REPLY` or `ERROR` only from Rust `FRAME_ACCEPTED` after structural
+decoding. Malformed frames are rejected without direction, and incomplete/fragmented input carries
+no invented browser direction while segmentation preserves the final Rust-owned result.
+
 ## Privacy and service-worker review
 
 Neither the host nor trace recorder logs. No trace path calls storage or network APIs. No device
@@ -63,7 +76,7 @@ root-absolute asset strategy is not suitable for repository-scoped Pages; curren
 contains the versioned, base-path-aware worker from PR #19/#20. That is an integration conflict,
 not permission for the diagnostic branch to replace the accepted worker overnight.
 
-## Findings fixed in the child branch
+## Findings present on PR #18 after the diagnostic merge
 
 1. Context-free `Unknown` terminal results now retain a fixed `failureOrigin`.
 2. Writer/reader acquisition and every cleanup operation now have distinct safe origins.
@@ -77,7 +90,7 @@ not permission for the diagnostic branch to replace the accepted worker overnigh
 
 - No physical FC test ran. Hardware support and identity completion remain unvalidated.
 - PR #18 and current `main` are divergent and must be integrated under the separate plan before
-  either PR #18 or this child can target `main` safely.
+  PR #18 can be merged to `main` safely. That integration is not authorized by this correction.
 - Generated `wasm-bindgen` glue contains its upstream initialization/MIME fallback warnings. They
   contain no serial/device/frame data and are not used by the diagnostic recorder, but a future
   generator review may choose to suppress them without hand-editing derived output.

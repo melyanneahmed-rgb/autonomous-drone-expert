@@ -2,10 +2,12 @@
 
 ## Executive outcome
 
-The overnight package remains review-only. Nothing was merged, rebased, force-pushed, marked
-Ready, dispatched to delivery, or applied to `main`. PR #17, PR #18, and PR #21 remain Draft,
-open, and unmerged. A new stacked Draft is prepared from the exact PR #18 head for the temporary,
-privacy-bounded diagnostic trace.
+This dossier now records the correction-only pass after repository state changed. PR #21 was
+merged normally into `main`. PR #23 was merged earlier than intended into PR #18 as
+`fa92e5aaade68d962c74843f7dbae6325fe3db2c`; that merge is retained and was not reverted. PR #18
+remains Draft/open/unmerged. This pass changes only the diagnostic identity, receive-direction
+semantics, tests, and current Git evidence on the PR #18 branch. It does not integrate `main`, mark
+Ready, dispatch delivery, change repository settings, or perform a physical FC operation.
 
 No physical FC operation was performed. The owner's earlier observation remains the full hardware
 evidence boundary:
@@ -19,20 +21,22 @@ evidence boundary:
 | Item | Exact state |
 | --- | --- |
 | Official repository | `melyanneahmed-rgb/autonomous-drone-expert` |
-| Accepted `main` | `4d7cf1ca9fa882b40e7151b96ce6c2dd8806b42b` |
-| Accepted `main` tree | `9829b47c9a6431f4756102df872c1af45b5e4c7d` |
-| Exact-main canonical CI | Run #99 / ID `31972348467`; all eight jobs passed |
+| Accepted `main` | `cea776b5c00444289eca95a255c0ec79d22eaaeb` |
+| Accepted `main` tree | `a89a3cbdf4339960c872b731f7e884b14974cdbe` |
+| Exact-main canonical CI | Run #109 / ID `32057428446`; all eight jobs passed |
 | PR #17 | Draft/open/unmerged; `716bc2f7fe39a77e44cda43ba6978ebd0d0ec1e0` |
-| PR #18 | Draft/open/unmerged; `3555a293d7b0ac785bdd040c2e401b7d24f64fcc` |
-| PR #18 tree | `01c00d587fcd67725809aceade1ef8aac700c8a8` |
-| PR #21 | Draft/open/unmerged; `3cb6516e0c93248d1f68d7e09a21e951f34c9e58` |
-| PR #21 canonical CI | Run #104 / ID `31974704560`; all eight jobs passed |
-| Diagnostic base | exact PR #18 head and tree above |
-| Diagnostic canonical CI | the final exact-head run is recorded in the stacked Draft body and PR checks because this dossier is itself part of the tested head |
+| PR #18 correction-start state | Draft/open/unmerged; `fa92e5aaade68d962c74843f7dbae6325fe3db2c` |
+| PR #18 correction-start tree | `8823a42a75a2a5f7b8db8b6c68e8acede51e63c7` |
+| PR #18 correction-start CI | Run #110 / ID `32057454110`; all eight jobs passed |
+| PR #21 | merged into `main` as `cea776b5c00444289eca95a255c0ec79d22eaaeb` |
+| PR #23 | merged into PR #18 as `fa92e5aaade68d962c74843f7dbae6325fe3db2c` |
+| Merge base | `8ef20be74a34912de53030d28d29b5e4108ddd08` |
+| Divergence | PR #18 ahead 21 / behind 19 at correction start |
+| Overlap | 11 paths, enumerated in `PR18-MAIN-INTEGRATION-PLAN.md` |
 
-## Work A: delivery allowlist hardening
+## Work A: merged delivery allowlist context
 
-PR #21 preserves immutable full-length SHA pins for all six delivery actions and treats
+Merged PR #21 preserves immutable full-length SHA pins for all six delivery actions and treats
 `actions/checkout@v7.0.1` as the one temporary canonical-CI exception. Its focused delivery
 contract tests passed 4/4 and canonical CI Run #104 passed all eight jobs. The PR changes only:
 
@@ -40,14 +44,16 @@ contract tests passed 4/4 and canonical CI Run #104 passed all eight jobs. The P
 - `policy/github-actions-allowlist.json`
 - `web/tests/delivery-workflows.test.mjs`
 
-No repository Actions administration setting was changed and neither delivery workflow was
-dispatched. PR #21 remains Draft for owner review.
+No repository Actions administration setting or delivery workflow is changed by this
+correction-only pass.
 
-## Work B: stacked diagnostic Draft
+## Work B: diagnostic merged into PR #18 and corrected in place
 
-The child branch is based on exact PR #18 head
-`3555a293d7b0ac785bdd040c2e401b7d24f64fcc`. It adds a temporary collapsed panel beneath the
-existing connection card and no new connection or write authority.
+PR #23 merged its reviewed head `f908f77ec88befc45a21e6aaa8491c5f7f21bdb3` into the prior PR
+#18 head `3555a293d7b0ac785bdd040c2e401b7d24f64fcc`. The resulting merge commit is
+`fa92e5aaade68d962c74843f7dbae6325fe3db2c`, and its tree is
+`8823a42a75a2a5f7b8db8b6c68e8acede51e63c7`. The temporary collapsed panel is therefore now part
+of PR #18. This correction retains that merge and adds no connection or write authority.
 
 The trace architecture is deliberately narrow:
 
@@ -102,21 +108,22 @@ parse MSP. Rust rejects wrong command, direction, reply class, checksum, structu
 scope. Every terminal browser and cleanup boundary now has a fixed safe origin. Failed attempts do
 not preserve reusable reader, writer, port, discovery, or trace authority.
 
-## Work D: integration analysis only
+## Work D: refreshed integration analysis only
 
-No integration was performed. `docs/m2/PR18-MAIN-INTEGRATION-PLAN.md` freezes the divergence and
-resolution rules.
+No `main` integration was performed. `docs/m2/PR18-MAIN-INTEGRATION-PLAN.md` freezes the refreshed
+divergence and resolution rules.
 
 PR #18 and current `main` have merge base
-`8ef20be74a34912de53030d28d29b5e4108ddd08`; the PR side is ahead 14 and behind 8. GitHub reports
-PR #18 not mergeable. Twelve paths overlap merged PR #19, with one of those also changed by PR
-#20. Current `main`'s base-aware/versioned PWA and delivery behavior must be preserved while PR
+`8ef20be74a34912de53030d28d29b5e4108ddd08`; the PR side is ahead 21 and behind 19. GitHub reports
+PR #18 not mergeable. Eleven paths overlap current `main` and PR #18. Current `main`'s
+base-aware/versioned PWA and delivery behavior must be preserved while PR
 #18's Rust/WASM read-only connection is integrated semantically. PR #18's root-absolute `/wasm/`
 and `/sw.js` assumptions must not survive a repository-scoped Pages integration.
 
 The recommended owner-approved path is a normal merge of the then-current `main` into PR #18,
-semantic conflict resolution and WASM regeneration, canonical CI, followed by a normal merge of
-the updated PR #18 into the diagnostic child. Shared history must not be rebased or force-pushed.
+semantic conflict resolution and WASM regeneration only if required, followed by canonical CI.
+Shared history must not be rebased or force-pushed. That integration remains a future owner
+decision.
 
 ## Work E: ranked repository audit findings
 
@@ -128,8 +135,8 @@ None found.
 
 | Files/evidence | Exact behavior and impact | Overnight disposition / next step |
 | --- | --- | --- |
-| The 12 paths enumerated in `docs/m2/PR18-MAIN-INTEGRATION-PLAN.md`; GitHub comparison of `main` and PR #18 | PR #18 is ahead 14, behind 8, and not mergeable. Blind conflict resolution could regress accepted PWA/base-path behavior or discard Rust read-only authority. | Not fixed because integration was explicitly analysis-only. Follow the documented normal-merge and semantic-resolution plan. |
-| `.github/workflows/web-preview.yml`, `.github/workflows/android-apk.yml`, repository selected-actions administration, PR #21 | Delivery startup was rejected before a job ran because the administration allowlist did not admit the immutable action SHAs. The product was not exercised. | PR #21's policy and tests were hardened and CI is green; administration remains unchanged. Owner must accept PR #21 before a separately approved settings change and delivery dispatch. |
+| The 11 paths enumerated in `docs/m2/PR18-MAIN-INTEGRATION-PLAN.md`; GitHub comparison of `main` and PR #18 | PR #18 is ahead 21, behind 19, and not mergeable. Blind conflict resolution could regress accepted PWA/base-path behavior or discard Rust read-only authority. | Not fixed because integration is explicitly analysis-only. Follow the documented normal-merge and semantic-resolution plan after separate owner approval. |
+| `.github/workflows/web-preview.yml`, `.github/workflows/android-apk.yml`, repository selected-actions administration | Delivery administration and dispatch are separate from this correction-only pass. | PR #21 is merged; this correction does not change settings or dispatch delivery. |
 
 ### Medium
 
@@ -155,7 +162,29 @@ None found.
 
 ## Validation evidence
 
-Local validation for the diagnostic child passed:
+The correction-only pass was validated again after changing the diagnostic header and browser RX
+direction semantics:
+
+- diagnostic recorder/copy tests: 4/4 passed, including the exact
+  `ADE_READONLY_DIAGNOSTIC_TRACE_V1` header and forbidden-identifier regression
+- TypeScript and the nine focused connection/authority source contracts passed
+- Web source tests: 40/41 passed locally; only the documented Windows Node 24 `.cmd` spawn wrapper
+  failed, while its direct production build passed
+- workspace Rust formatting, clippy with `-D warnings`, and 202 workspace tests passed
+- Rust 1.85.0 workspace MSRV check passed; the isolated tool compiled on Rust 1.97.1 because this
+  sandbox could not install the absent Rust 1.86.0 toolchain, so canonical Linux CI must prove its
+  declared 1.86.0 MSRV
+- Web Serial authority, dependency, isolation, unsafe-Rust, provenance, generated-WASM, and secret
+  gates passed; the Python policy suite passed 99 tests with one environment-only symlink skip
+- real Chrome Rust/WASM Web Serial groups A–J passed, including Rust-owned `REPLY`/`ERROR`,
+  malformed/fragmented input, per-stage timeout/disconnect, retry, cleanup, and privacy attacks
+- real Chrome production connection scenarios passed with
+  `SOFTWARE_EXERCISED;REAL_CHROME_EXERCISED;PHYSICAL_FC_NOT_TESTED;HARDWARE_OBSERVED=NO`
+
+The committed generated JavaScript, canonical Linux WASM, and package lock retained the exact
+hashes recorded below. No Rust ABI, generated asset, dependency manifest, or lockfile changed.
+
+Historical local validation for the diagnostic work before its merge into PR #18 passed:
 
 - `cargo fmt --all --check`
 - focused Rust bridge clippy with `-D warnings`
@@ -201,21 +230,18 @@ from the final head; the final canonical run must reproduce the committed Linux 
 
 ## Owner review sequence
 
-1. Review PR #21 independently. Do not change delivery administration or dispatch a workflow
-   until that PR is accepted under a separate owner decision.
-2. Review the diagnostic stacked Draft for vocabulary, privacy boundary, UI placement, and test
-   evidence. Keep it stacked on PR #18.
-3. Review the Web Serial safety report and the ranked findings above.
-4. Approve or reject the PR #18/main integration plan. No integration has been pre-authorized by
-   this package.
-5. If integration is approved later, require the exact-head/tree and all eight canonical CI jobs
+1. Review the corrected PR #18 identity, RX-direction semantics, privacy boundary, and exact-head
+   CI while keeping PR #18 Draft/open/unmerged.
+2. Review the Web Serial safety report and refreshed integration findings above.
+3. Approve or reject the PR #18/main integration plan separately. No integration has been
+   pre-authorized by this package.
+4. If integration is approved later, require the exact-head/tree and all eight canonical CI jobs
    before any Ready or merge decision.
-6. A new physical USB-only attempt remains a separate explicit owner action after the software
+5. A new physical USB-only attempt remains a separate explicit owner action after the software
    lineage is accepted. This package does not request or perform it.
 
 The required decisions are therefore short and explicit:
 
-- `DECISION 1 — Accept or reject revised PR #21.`
-- `DECISION 2 — Accept or reject the Diagnostic Trace architecture.`
-- `DECISION 3 — Approve or reject integration of latest main into PR #18.`
-- `DECISION 4 — After accepted integration, approve or reject one physical USB-only retest.`
+- `DECISION 1 — Accept or reject the corrected Diagnostic Trace on PR #18.`
+- `DECISION 2 — Approve or reject integration of latest main into PR #18.`
+- `DECISION 3 — After accepted integration, approve or reject one physical USB-only retest.`

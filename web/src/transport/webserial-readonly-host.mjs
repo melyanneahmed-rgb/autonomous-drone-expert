@@ -133,8 +133,8 @@ export class WebSerialReadonlyHost {
       ...optionalFields({
         stage: this.#activeStage,
         command: this.#activeCommand,
+        direction: event === "TX_FAILED" ? "REQUEST" : undefined,
       }),
-      direction: event === "TX_FAILED" ? "REQUEST" : "REPLY",
       failureClass,
       origin,
     });
@@ -412,7 +412,6 @@ export class WebSerialReadonlyHost {
         stage: this.#activeStage,
         command: this.#activeCommand,
         byteCount: value.byteLength,
-        direction: "REPLY",
       });
       const next = discovery.acceptReadChunk(directive.requestId, value);
       this.#drainRustTrace(discovery);

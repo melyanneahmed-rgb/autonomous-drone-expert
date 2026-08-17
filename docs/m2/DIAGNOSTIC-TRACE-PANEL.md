@@ -16,7 +16,8 @@ USB-only attempt. Software and fake-device browser tests are not physical eviden
 The event path is intentionally split by authority:
 
 1. `WebSerialReadonlyHost` records browser operation boundaries, safe byte counts, fixed browser
-   failure classes, cleanup, and structural origins.
+   failure classes, cleanup, and structural origins. Its `RX_CHUNK` and `RX_FAILED` events do not
+   claim an MSP direction because received bytes have not yet been decoded.
 2. `WasmReadonlySerialDiscovery` remains authoritative for the identification stage, command,
    MSP frame acceptance/rejection, direction, and parser reason.
 3. Rust exposes those facts only through a bounded `WasmReadonlyTraceEvent` and destructive
@@ -65,6 +66,11 @@ Directions:
 
 `REQUEST`, `REPLY`, `ERROR`
 
+The browser SERIAL layer uses `REQUEST` only for Rust-authorized TX events. `REPLY` and `ERROR`
+appear only on authoritative Rust `FRAME_ACCEPTED` events after MSP decoding. Receive chunks,
+receive failures, malformed frames, and incomplete frames never receive a browser-invented
+direction.
+
 Failure classes:
 
 `Unavailable`, `Cancelled`, `PermissionDenied`, `PortBusy`, `Disconnected`, `Timeout`,
@@ -106,7 +112,7 @@ example `origin=PORT_OPEN` or `origin=UI_BOUNDARY`. A protocol failure shows the
 frame decision, parser reason, close/cleanup result, and terminal result without showing the
 response itself.
 
-`نسخ السجل الآمن` copies only `FPV_ARBCON_READONLY_DIAGNOSTIC_TRACE_V1` and the validated event
+`نسخ السجل الآمن` copies only `ADE_READONLY_DIAGNOSTIC_TRACE_V1` and the validated event
 lines. `مسح` clears only the current page's RAM trace.
 
 ## Automated evidence

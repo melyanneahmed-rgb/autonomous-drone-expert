@@ -1,28 +1,30 @@
 # PR #18 to current-main integration plan
 
-## Frozen comparison
+## Correction-start comparison
 
 This is analysis only. No merge, rebase, reset, or branch retargeting was performed.
 
 | Item | Exact value |
 | --- | --- |
-| Current accepted `main` | `4d7cf1ca9fa882b40e7151b96ce6c2dd8806b42b` |
-| Current `main` tree | `9829b47c9a6431f4756102df872c1af45b5e4c7d` |
-| PR #18 head | `3555a293d7b0ac785bdd040c2e401b7d24f64fcc` |
-| PR #18 tree | `01c00d587fcd67725809aceade1ef8aac700c8a8` |
+| Current accepted `main` | `cea776b5c00444289eca95a255c0ec79d22eaaeb` |
+| Current `main` tree | `a89a3cbdf4339960c872b731f7e884b14974cdbe` |
+| PR #18 correction-start head | `fa92e5aaade68d962c74843f7dbae6325fe3db2c` |
+| PR #18 correction-start tree | `8823a42a75a2a5f7b8db8b6c68e8acede51e63c7` |
+| PR #23 merge commit into PR #18 | `fa92e5aaade68d962c74843f7dbae6325fe3db2c` |
 | Merge base | `8ef20be74a34912de53030d28d29b5e4108ddd08` |
-| GitHub comparison | diverged; PR #18 side ahead 14, behind 8 |
+| GitHub comparison | diverged; PR #18 side ahead 21, behind 19 |
 | PR #18 current state | Draft, open, unmerged, GitHub reports not mergeable |
-| Diagnostic child base | exact PR #18 head above |
+| Correction publication | the post-correction head/tree are recorded in PR #18 and exact-head CI because a commit cannot truthfully embed its own SHA |
 
-The eight `main`-side commits are the merged GitHub-native delivery infrastructure from PR #19
-and the focused service-worker control correction from PR #20. PR #21 remains a separate Draft on
-current `main` and changes only the delivery document, selected-actions policy, and delivery
-workflow contract test.
+The 19 `main`-side commits include the merged GitHub-native delivery infrastructure from PR #19,
+the focused service-worker control correction from PR #20, and the selected-actions policy from
+merged PR #21. PR #23 is no longer a stacked unmerged child: GitHub merged it normally into PR #18
+with first parent `3555a293d7b0ac785bdd040c2e401b7d24f64fcc` and second parent
+`f908f77ec88befc45a21e6aaa8491c5f7f21bdb3`. That merge is retained.
 
 ## Overlap inventory
 
-PR #18 and merged PR #19 both change these 12 paths:
+Current `main` and PR #18 both change these 11 paths from the verified merge base:
 
 - `.github/workflows/ci.yml`
 - `scripts/check_webserial_boundary.py`
@@ -32,7 +34,6 @@ PR #18 and merged PR #19 both change these 12 paths:
 - `web/tests/authority-boundary.test.mjs`
 - `web/tests/browser/webserial-readonly-smoke.mjs`
 - `web/tests/build-contract.test.mjs`
-- `web/tests/indexeddb-storage-boundary.test.mjs`
 - `web/tests/pwa-contract.test.mjs`
 - `web/tests/webserial-readonly-browser-smoke.mjs`
 - `web/vite.config.ts`
@@ -41,13 +42,12 @@ Merged PR #20 additionally changes `web/tests/pwa-contract.test.mjs`, already in
 `web/src/pwa-register.ts` and `web/tests/production-delivery-browser-smoke.mjs`, which PR #18 did
 not change.
 
-PR #21 has no path overlap with PR #18 or the diagnostic child. It may be reviewed/merged first or
-last, but its exact-main CI and selected-actions administrative follow-up must remain independent
-from product integration.
+Merged PR #21 has no path overlap with PR #18. Its selected-actions policy and any delivery
+administration remain independent from product integration and are not changed by this correction.
 
-The diagnostic child deliberately changes several overlapping PR #18 files further: the Rust
-bridge and generated assets, Web Serial host, connection facade, `App`, styles, Web Serial policy,
-and browser/static tests. It must not be retargeted directly to `main` before PR #18 integration.
+The diagnostic work merged by PR #23 changes the Rust bridge and generated assets, Web Serial host,
+connection facade, `App`, styles, Web Serial policy, and browser/static tests on PR #18. PR #18 must
+not be merged to `main` before the separately approved integration pass.
 
 ## Required resolution behavior
 
@@ -69,8 +69,8 @@ The merged result must preserve both sides rather than choosing one whole file:
 
 - Keep PR #18's `ReadonlyIdentification`, typed failure stage/reason, exact four-read bridge,
   checked-in asset provenance, product browser connection facade, and `hardwareObserved=false`.
-- Keep the diagnostic child's 32-entry Rust event queue, 200-entry page ring, fixed origins,
-  privacy gates, and `takeTraceEvent()` API if the owner accepts that child.
+- Keep the merged diagnostic's 32-entry Rust event queue, 200-entry page ring, fixed origins,
+  privacy gates, and `takeTraceEvent()` API.
 - Regenerate the serial WASM once from the final resolved Rust source with Rust 1.85.0 and the
   isolated `wasm-bindgen-cli-support 0.2.127` tool. Update provenance to the resulting source and
   outputs. Do not hand-merge generated JavaScript or WASM.
@@ -94,24 +94,20 @@ The merged result must preserve both sides rather than choosing one whole file:
 
 ## Safe execution order for owner approval
 
-1. Re-verify `main`, PR #18, PR #21, and the diagnostic child exact heads/trees and Draft state.
-2. Review PR #21 independently. If accepted, merge normally, wait for all eight exact-main jobs,
-   and refreeze the new main SHA/tree before product integration.
-3. Create an integration worktree from `feat/m2-webapp-readonly-fc-connect`. Make a normal merge
+1. Re-verify `main` and corrected PR #18 exact heads/trees and confirm PR #18 remains Draft.
+2. Review the correction-only identity, RX-direction, privacy, authority, and exact-head CI
+   evidence. Do not merge `main` during this review.
+3. Only after a separate owner approval, create an integration worktree from
+   `feat/m2-webapp-readonly-fc-connect` and make a normal merge
    commit from the then-current `main`; do not rebase or force-push shared history.
-4. Resolve the 12 overlapping paths using the behavioral rules above. Do not copy an entire side
+4. Resolve the 11 overlapping paths using the behavioral rules above. Do not copy an entire side
    over the other.
 5. Build/regenerate the serial WASM through the trusted path, update provenance, and run focused
    authority, privacy, base-path, PWA transition, and Chrome tests at both `/` and the repository
    scope.
 6. Run canonical CI once. Keep PR #18 Draft for owner review of the merge commit and exact tree.
-7. Merge the updated PR #18 branch into `feat/m2-diagnostic-trace-panel` with a normal merge commit.
-   Resolve by retaining the updated base-path/PWA integration plus the child trace model/tests.
-   Do not rebase or rewrite the published child.
-8. Regenerate again only if that second resolution changes Rust or ABI output. Run the child
-   focused suite and canonical CI, then keep the stacked PR Draft.
-9. Only after both Drafts are reviewed should the owner decide the final merge order. Delivery
-   dispatch and physical USB retest are later, separate approvals.
+7. Keep the integrated PR #18 Draft for owner review. Delivery dispatch and physical USB retest
+   remain later, separate approvals.
 
 ## Stop conditions
 

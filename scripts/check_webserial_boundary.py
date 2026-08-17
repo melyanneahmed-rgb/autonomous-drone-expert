@@ -262,7 +262,7 @@ def repository_errors(root: Path = ROOT) -> list[str]:
     adapter_path = root / ADAPTER
     declaration_path = root / DECLARATION
     if adapter_path.is_file() and hashlib.sha256(adapter_path.read_bytes()).hexdigest() != (
-        "9a8bb955292bad61a20062e41b92c8ca1cdb66b3d7d2d9110fbc8cad179385f9"
+        "ca5def427f38df9eb7c2cfb79de2bb120052df9b3a0cb9813ba0f0899528883e"
     ):
         errors.append("accepted production Web Serial host source drifted")
     if declaration_path.is_file() and hashlib.sha256(declaration_path.read_bytes()).hexdigest() != (

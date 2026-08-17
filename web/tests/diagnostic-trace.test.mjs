@@ -15,8 +15,13 @@ const safeChunk = (byteCount) => ({
   stage: "API_VERSION",
   command: "MSP_API_VERSION",
   byteCount,
-  direction: "REPLY",
 });
+
+const forbiddenDiagnosticIdentifiers = () =>
+  ["ARBCON", "ARCON"].flatMap((suffix) => [
+    ["FPV", suffix].join("_"),
+    ["FPV", suffix].join("-"),
+  ]);
 
 test("the RAM-only ring buffer has a deterministic 200-event bound", () => {
   const trace = new DiagnosticTraceRecorder();
@@ -59,7 +64,7 @@ test("the recorder rejects raw, arbitrary, and structurally unbounded fields", (
   assert.deepEqual(trace.snapshot(), []);
 });
 
-test("copy text contains only fixed tokens and bounded numeric metadata", () => {
+test("copy text uses the ADE header and only fixed tokens with bounded numeric metadata", () => {
   const trace = new DiagnosticTraceRecorder();
   trace.record({
     layer: "RUST",
@@ -81,15 +86,20 @@ test("copy text contains only fixed tokens and bounded numeric metadata", () => 
     origin: "MSP_FRAME",
   });
 
+  const formatted = formatSafeDiagnosticTrace([...trace.snapshot()]);
   assert.equal(
-    formatSafeDiagnosticTrace([...trace.snapshot()]),
+    formatted,
     [
-      "FPV_ARBCON_READONLY_DIAGNOSTIC_TRACE_V1",
+      "ADE_READONLY_DIAGNOSTIC_TRACE_V1",
       "sequence=1 layer=RUST phase=API_VERSION event=DIRECTIVE stage=API_VERSION command=MSP_API_VERSION byteCount=6 direction=REQUEST",
       "sequence=2 layer=MSP phase=MSP_FRAME event=FRAME_REJECTED stage=API_VERSION command=MSP_API_VERSION direction=ERROR failureClass=MalformedResponse origin=MSP_FRAME",
       "",
     ].join("\n"),
   );
+  assert.ok(formatted.startsWith("ADE_READONLY_DIAGNOSTIC_TRACE_V1\n"));
+  for (const forbidden of forbiddenDiagnosticIdentifiers()) {
+    assert.equal(formatted.includes(forbidden), false, forbidden);
+  }
 });
 
 test("the trace implementation has no logging, persistence, or network sink", async () => {

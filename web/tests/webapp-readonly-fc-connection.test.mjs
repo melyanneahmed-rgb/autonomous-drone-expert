@@ -30,7 +30,7 @@ function numericFixture(source, declaration) {
 }
 
 test("the bounded production host and declaration are byte-locked", () => {
-  assert.equal(sha256(host), "9a8bb955292bad61a20062e41b92c8ca1cdb66b3d7d2d9110fbc8cad179385f9");
+  assert.equal(sha256(host), "ca5def427f38df9eb7c2cfb79de2bb120052df9b3a0cb9813ba0f0899528883e");
   assert.equal(
     sha256(hostTypes),
     "fed3d8e35d89a95b4efd20a53044d83748421fe5c23927d21b83d576c3d3ac0a",
