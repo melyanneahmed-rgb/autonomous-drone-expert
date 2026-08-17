@@ -292,6 +292,17 @@ export class WasmReadonlySerialDiscovery {
         return v1;
     }
     /**
+     * Remove the oldest privacy-bounded protocol event, if one is waiting.
+     *
+     * The queue is fixed at 32 entries and carries only stable enum-like labels and a
+     * request byte count. The browser host drains it into its separate bounded RAM trace.
+     * @returns {WasmReadonlyTraceEvent | undefined}
+     */
+    takeTraceEvent() {
+        const ret = wasm.wasmreadonlyserialdiscovery_takeTraceEvent(this.__wbg_ptr);
+        return ret === 0 ? undefined : WasmReadonlyTraceEvent.__wrap(ret);
+    }
+    /**
      * @returns {string | undefined}
      */
     get targetName() {
@@ -305,6 +316,156 @@ export class WasmReadonlySerialDiscovery {
     }
 }
 if (Symbol.dispose) WasmReadonlySerialDiscovery.prototype[Symbol.dispose] = WasmReadonlySerialDiscovery.prototype.free;
+
+/**
+ * One privacy-bounded protocol event emitted by the authoritative Rust state machine.
+ *
+ * Every string getter returns a member of a fixed vocabulary. No raw frame, payload,
+ * identity value, browser error or user-controlled string is retained here.
+ */
+export class WasmReadonlyTraceEvent {
+    static __wrap(ptr) {
+        const obj = Object.create(WasmReadonlyTraceEvent.prototype);
+        obj.__wbg_ptr = ptr;
+        WasmReadonlyTraceEventFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WasmReadonlyTraceEventFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_wasmreadonlytraceevent_free(ptr, 0);
+    }
+    /**
+     * @returns {number | undefined}
+     */
+    get byteCount() {
+        const ret = wasm.wasmreadonlytraceevent_byteCount(this.__wbg_ptr);
+        return ret === Number.MAX_SAFE_INTEGER ? undefined : ret;
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    get command() {
+        const ret = wasm.wasmreadonlytraceevent_command(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    get direction() {
+        const ret = wasm.wasmreadonlytraceevent_direction(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {string}
+     */
+    get event() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmreadonlytraceevent_event(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    get failureClass() {
+        const ret = wasm.wasmreadonlytraceevent_failureClass(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    get failureReason() {
+        const ret = wasm.wasmreadonlytraceevent_failureReason(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {string}
+     */
+    get layer() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmreadonlytraceevent_layer(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    get origin() {
+        const ret = wasm.wasmreadonlytraceevent_origin(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {string}
+     */
+    get phase() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmreadonlytraceevent_phase(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    get stage() {
+        const ret = wasm.wasmreadonlytraceevent_stage(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+}
+if (Symbol.dispose) WasmReadonlyTraceEvent.prototype[Symbol.dispose] = WasmReadonlyTraceEvent.prototype.free;
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -337,6 +498,9 @@ const WasmReadonlySerialDirectiveFinalization = (typeof FinalizationRegistry ===
 const WasmReadonlySerialDiscoveryFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmreadonlyserialdiscovery_free(ptr, 1));
+const WasmReadonlyTraceEventFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasmreadonlytraceevent_free(ptr, 1));
 
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
