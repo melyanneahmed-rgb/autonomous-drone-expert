@@ -99,7 +99,7 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
         if marker not in adapter:
             errors.append(f"designated adapter is missing required bounded behavior: {marker}")
 
-    binding_module = "/wasm/ade_web_readonly_serial_wasm_bridge.js"
+    binding_module = "virtual:ade-web-readonly-serial-wasm"
     import_match = re.search(
         rf'import\s*\{{(?P<names>[^}}]+)\}}\s*from\s*["\']{re.escape(binding_module)}["\']',
         adapter,
@@ -147,9 +147,9 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
 
     if facade is not None:
         required_facade = (
-            'import initReadonlySerialWasm from "/wasm/ade_web_readonly_serial_wasm_bridge.js"',
+            'import initReadonlySerialWasm from "virtual:ade-web-readonly-serial-wasm"',
             'import { WebSerialReadonlyHost } from "../transport/webserial-readonly-host.mjs"',
-            "await initReadonlySerialWasm({",
+            "await initReadonlySerialWasm();",
             "const selection = await this.#host.selectPortFromUserGesture()",
             "await this.#host.discover()",
             "result.hardwareObserved !== false",
@@ -177,6 +177,8 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
             errors.append("product connection facade gained command/payload/write authority")
         if re.search(r"\b(?:localStorage|sessionStorage|indexedDB)\b|document\.cookie", facade):
             errors.append("product connection facade must not persist device identity")
+        if "/wasm/ade_web_readonly_serial_wasm_bridge" in facade:
+            errors.append("product connection facade contains a root-absolute WASM assumption")
 
     if facade_declaration is not None:
         if not re.search(r"\bdiscover\s*\(\s*\)\s*:", facade_declaration):
@@ -262,7 +264,7 @@ def repository_errors(root: Path = ROOT) -> list[str]:
     adapter_path = root / ADAPTER
     declaration_path = root / DECLARATION
     if adapter_path.is_file() and hashlib.sha256(adapter_path.read_bytes()).hexdigest() != (
-        "ca5def427f38df9eb7c2cfb79de2bb120052df9b3a0cb9813ba0f0899528883e"
+        "cd8149b04cb2d2606243ccb86fe803229f13f99ce4e4e41d795d084617f953ff"
     ):
         errors.append("accepted production Web Serial host source drifted")
     if declaration_path.is_file() and hashlib.sha256(declaration_path.read_bytes()).hexdigest() != (

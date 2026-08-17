@@ -119,13 +119,49 @@ jobs:
         working-directory: web
         run: node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-product-regenerated
 
-      - name: Production build
-        working-directory: web
-        run: npx --yes npm@11.13.0 run build
+      - name: Stage exact same-origin WASM production assets
+        run: >-
+          python3 scripts/prepare_web_wasm.py
+          --serial-root target/webserial-wasm-product-regenerated
 
-      - name: Real Chrome production Smart Configurator read-only connection gate
+      - name: Real browser gates at the repository Pages scope
         working-directory: web
-        run: node --experimental-websocket tests/webapp-readonly-fc-browser-smoke.mjs
+        run: |
+          node --experimental-websocket tests/indexeddb-browser-smoke.mjs /autonomous-drone-expert/
+          node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web /autonomous-drone-expert/
+          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-product-regenerated /autonomous-drone-expert/
+
+      - name: Root production delivery and PWA update gate
+        working-directory: web
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          old_sha=0000000000000000000000000000000000000000
+          ADE_WEB_BASE_PATH=/ ADE_BUILD_SHA="$old_sha" npx --yes npm@11.13.0 run build
+          cp -R dist "$RUNNER_TEMP/web-root-old"
+          ADE_WEB_BASE_PATH=/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
+          node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
+            dist / "$SOURCE_SHA" "$RUNNER_TEMP/web-root-old" "$old_sha"
+          node --experimental-websocket tests/webapp-readonly-fc-browser-smoke.mjs dist /
+
+      - name: Repository-subpath production delivery and PWA update gate
+        working-directory: web
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          old_sha=0000000000000000000000000000000000000000
+          ADE_WEB_BASE_PATH=/autonomous-drone-expert/ ADE_BUILD_SHA="$old_sha" npx --yes npm@11.13.0 run build
+          cp -R dist "$RUNNER_TEMP/web-subpath-old"
+          ADE_WEB_BASE_PATH=/autonomous-drone-expert/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
+          node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
+            dist /autonomous-drone-expert/ "$SOURCE_SHA" "$RUNNER_TEMP/web-subpath-old" "$old_sha"
+          node --experimental-websocket tests/webapp-readonly-fc-browser-smoke.mjs \
+            dist /autonomous-drone-expert/
+
+      - name: Public Pages artifact privacy gate
+        run: python3 scripts/check_public_web_artifact.py web/dist
 
       - name: Security audit
         working-directory: web
@@ -156,6 +192,9 @@ jobs:
 
       - name: Checked-in Web Serial product asset provenance gate
         run: python3 scripts/verify_webserial_product_assets.py
+
+      - name: Android packaging authority and dependency gate
+        run: python3 scripts/check_android_validation.py
 
       - name: Unsafe-Rust gate
         run: python3 scripts/check_forbid_unsafe.py

@@ -1,8 +1,6 @@
-import initReadonlySerialWasm from "/wasm/ade_web_readonly_serial_wasm_bridge.js";
+import initReadonlySerialWasm from "virtual:ade-web-readonly-serial-wasm";
 
 import { WebSerialReadonlyHost } from "../transport/webserial-readonly-host.mjs";
-
-const WASM_ASSET_PATH = "/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm";
 
 function privacyBoundedResult(result, host) {
   if (result.hardwareObserved !== false) {
@@ -67,8 +65,6 @@ class PreparedReadonlyFcConnection {
 
 /** Prepare the audited Rust runtime before the product enables either connection button. */
 export async function prepareReadonlyFcConnection() {
-  await initReadonlySerialWasm({
-    module_or_path: new URL(WASM_ASSET_PATH, globalThis.location.href),
-  });
+  await initReadonlySerialWasm();
   return Object.freeze(new PreparedReadonlyFcConnection());
 }

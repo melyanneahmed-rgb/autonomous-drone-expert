@@ -30,7 +30,7 @@ function numericFixture(source, declaration) {
 }
 
 test("the bounded production host and declaration are byte-locked", () => {
-  assert.equal(sha256(host), "ca5def427f38df9eb7c2cfb79de2bb120052df9b3a0cb9813ba0f0899528883e");
+  assert.equal(sha256(host), "cd8149b04cb2d2606243ccb86fe803229f13f99ce4e4e41d795d084617f953ff");
   assert.equal(
     sha256(hostTypes),
     "fed3d8e35d89a95b4efd20a53044d83748421fe5c23927d21b83d576c3d3ac0a",
@@ -72,7 +72,7 @@ test("facade exports no command, payload, raw transport, or replaceable host aut
   assert.deepEqual(
     [...facade.matchAll(/^import .* from "([^"]+)";$/gm)].map((match) => match[1]),
     [
-      "/wasm/ade_web_readonly_serial_wasm_bridge.js",
+      "virtual:ade-web-readonly-serial-wasm",
       "../transport/webserial-readonly-host.mjs",
     ],
   );
@@ -86,15 +86,15 @@ test("facade exports no command, payload, raw transport, or replaceable host aut
   assert.doesNotMatch(facade, /export\s+(?:class|\{[^}]*PreparedReadonlyFcConnection)/);
 });
 
-test("Vite externalizes only the byte-locked same-origin generated module", () => {
-  const external = viteConfig.match(/external:\s*\[(?<entries>[^\]]*)\]/s);
-  assert.ok(external?.groups?.entries, "missing bounded Rolldown external list");
-  assert.deepEqual(
-    [...external.groups.entries.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]),
-    ["/wasm/ade_web_readonly_serial_wasm_bridge.js"],
-  );
-  assert.match(viteConfig, /rolldownOptions:\s*\{/);
-  assert.doesNotMatch(external.groups.entries, /\*|RegExp|new\s+URL|https?:/i);
+test("Vite resolves the generated module only through the normalized deployment base", () => {
+  assert.match(viteConfig, /const READONLY_WASM_MODULE_ID = "virtual:ade-web-readonly-serial-wasm"/);
+  assert.match(viteConfig, /const base = normalizedBasePath\(process\.env\.ADE_WEB_BASE_PATH\)/);
+  assert.match(viteConfig, /readonlyWasmGlue = `\$\{base\}wasm\/ade_web_readonly_serial_wasm_bridge\.js`/);
+  assert.match(viteConfig, /readonlyWasmBinary = `\$\{base\}wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm`/);
+  assert.match(viteConfig, /module_or_path: new URL/);
+  assert.match(viteConfig, /external: true/);
+  assert.doesNotMatch(viteConfig, /external:\s*\["\/wasm\//);
+  assert.doesNotMatch(facade, /["']\/wasm\/ade_web_readonly_serial_wasm_bridge/);
 });
 
 test("production browser gate uses a trusted native gesture rather than DOM click injection", () => {

@@ -97,8 +97,8 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
         sources = copy.deepcopy(self.sources)
         adapter = check_webserial_boundary.ADAPTER
         sources[adapter] = sources[adapter].replace(
-            'from "/wasm/ade_web_readonly_serial_wasm_bridge.js"',
-            'from "/wasm/caller-selected-bindings.js"',
+            'from "virtual:ade-web-readonly-serial-wasm"',
+            'from "virtual:caller-selected-bindings"',
         )
         self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
 

@@ -12,6 +12,18 @@ const adapterPath = path.join(webRoot, "src", "storage", "indexeddb-journal-stor
 const contractPath = path.join(webRoot, "src", "storage", "journal-storage-contract.mjs");
 const servedRequests = [];
 
+function normalizedBasePath(value = "/") {
+  const candidate = value.trim();
+  if (!candidate.startsWith("/") || /[?#]/.test(candidate)) {
+    throw new Error("BASE_PATH_MUST_BE_ABSOLUTE");
+  }
+  const withoutTrailingSlash = candidate.replace(/\/+$/, "");
+  return withoutTrailingSlash ? `${withoutTrailingSlash}/` : "/";
+}
+
+const basePath = normalizedBasePath(process.argv[2]);
+const route = (relative = "") => `${basePath}${relative}`;
+
 async function transpileAdapter() {
   const source = fs.readFileSync(adapterPath, "utf8");
   try {
@@ -49,25 +61,25 @@ function findBrowser() {
 
 function serve(adapterSource) {
   const routes = new Map([
-    ["/", ["text/html; charset=utf-8", fs.readFileSync(path.join(browserRoot, "indexeddb-smoke.html"))]],
-    ["/indexeddb-smoke.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(path.join(browserRoot, "indexeddb-smoke.mjs"))]],
-    ["/adapter.js", ["text/javascript; charset=utf-8", Buffer.from(adapterSource)]],
-    ["/journal-storage-contract.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(contractPath)]],
+    [route(), ["text/html; charset=utf-8", fs.readFileSync(path.join(browserRoot, "indexeddb-smoke.html"))]],
+    [route("indexeddb-smoke.mjs"), ["text/javascript; charset=utf-8", fs.readFileSync(path.join(browserRoot, "indexeddb-smoke.mjs"))]],
+    [route("adapter.js"), ["text/javascript; charset=utf-8", Buffer.from(adapterSource)]],
+    [route("journal-storage-contract.mjs"), ["text/javascript; charset=utf-8", fs.readFileSync(contractPath)]],
   ]);
   return http.createServer((request, response) => {
     servedRequests.push(request.url);
-    const route = routes.get(request.url);
-    if (!route) {
-      response.writeHead(request.url === "/favicon.ico" ? 204 : 404);
+    const selectedRoute = routes.get(request.url);
+    if (!selectedRoute) {
+      response.writeHead(request.url === route("favicon.ico") ? 204 : 404);
       response.end();
       return;
     }
     response.writeHead(200, {
-      "Content-Type": route[0],
+      "Content-Type": selectedRoute[0],
       "Cache-Control": "no-store",
       "Cross-Origin-Resource-Policy": "same-origin",
     });
-    response.end(route[1]);
+    response.end(selectedRoute[1]);
   });
 }
 
@@ -207,7 +219,7 @@ const profile = await mkdtemp(path.join(os.tmpdir(), "ade-indexeddb-smoke-"));
 const server = serve(await transpileAdapter());
 try {
   const port = await listen(server);
-  const result = await runBrowser(browser, `http://127.0.0.1:${port}/`, profile);
+  const result = await runBrowser(browser, `http://127.0.0.1:${port}${basePath}`, profile);
   if (
     result.state !== "pass" ||
     result.output !== "INDEXEDDB_BROWSER_SMOKE_PASS"

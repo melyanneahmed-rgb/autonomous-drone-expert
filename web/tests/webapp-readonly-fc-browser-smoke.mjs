@@ -7,8 +7,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
-const dist = path.join(webRoot, "dist");
+const dist = path.resolve(process.argv[2] ?? path.join(webRoot, "dist"));
 const servedRequests = [];
+
+function normalizedBasePath(value = "/") {
+  const candidate = value.trim();
+  if (!candidate.startsWith("/") || /[?#]/.test(candidate)) {
+    throw new Error("BASE_PATH_MUST_BE_ABSOLUTE");
+  }
+  const withoutTrailingSlash = candidate.replace(/\/+$/, "");
+  return withoutTrailingSlash ? `${withoutTrailingSlash}/` : "/";
+}
+
+const basePath = normalizedBasePath(process.argv[3]);
 
 if (!fs.existsSync(path.join(dist, "index.html"))) {
   console.error("PRODUCTION_SMART_CONFIGURATOR_DIST_MISSING");
@@ -48,7 +59,13 @@ function serveProduction() {
   return http.createServer((request, response) => {
     const requestUrl = new URL(request.url, "http://127.0.0.1");
     servedRequests.push(requestUrl.pathname);
-    const relative = requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
+    if (!requestUrl.pathname.startsWith(basePath)) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    const relativePath = requestUrl.pathname.slice(basePath.length);
+    const relative = relativePath === "" ? "index.html" : relativePath;
     const file = path.resolve(root, relative);
     if (!file.startsWith(`${root}${path.sep}`) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       response.writeHead(requestUrl.pathname === "/favicon.ico" ? 204 : 404);
@@ -418,7 +435,7 @@ const prohibitedCommands = new Set([68, 99, 184, 185, 250]);
 const server = serveProduction();
 try {
   const port = await listen(server);
-  const url = `http://127.0.0.1:${port}/`;
+  const url = `http://127.0.0.1:${port}${basePath}`;
   const success = await runScenario(browser, url, "in-scope", "read-complete");
   if (
     success.requestCount !== 1 || !success.userActivationAtRequest ||
@@ -490,12 +507,16 @@ try {
     ) throw new Error("PRODUCTION_UI_DIAGNOSTIC_PRIVACY_ATTACK_FAILED");
   }
   for (const asset of [
-    "/wasm/ade_web_readonly_serial_wasm_bridge.js",
-    "/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+    `${basePath}wasm/ade_web_readonly_serial_wasm_bridge.js`,
+    `${basePath}wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm`,
   ]) {
     if (!servedRequests.includes(asset)) throw new Error(`PRODUCTION_VERIFIED_ASSET_NOT_LOADED:${asset}`);
   }
+  if (basePath !== "/" && servedRequests.some((request) => request.startsWith("/wasm/"))) {
+    throw new Error("PRODUCTION_SERIAL_WASM_ESCAPED_REPOSITORY_SCOPE");
+  }
   console.log("production Smart Configurator Rust WASM read-only connection passed");
+  console.log(`BASE_PATH=${basePath}`);
   console.log("SOFTWARE_EXERCISED;REAL_CHROME_EXERCISED;PHYSICAL_FC_NOT_TESTED;HARDWARE_OBSERVED=NO");
 } finally {
   await new Promise((resolve) => server.close(resolve));

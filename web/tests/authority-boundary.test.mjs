@@ -5,11 +5,6 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
-const derivedAssets = new Set([
-  path.join(webRoot, "public", "wasm", "ade_web_readonly_serial_wasm_bridge.js"),
-  path.join(webRoot, "public", "wasm", "ade_web_readonly_serial_wasm_bridge_bg.wasm"),
-]);
-
 function sourceFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(directory, entry.name);
@@ -19,7 +14,11 @@ function sourceFiles(directory) {
 
 test("product surface keeps storage and read-only serial authority in designated adapters", () => {
   const files = [path.join(webRoot, "index.html"), ...sourceFiles(path.join(webRoot, "src")), ...sourceFiles(path.join(webRoot, "public"))]
-    .filter((file) => !file.endsWith("favicon.svg") && !derivedAssets.has(file));
+    .filter(
+      (file) =>
+        !file.endsWith("favicon.svg") &&
+        !file.startsWith(path.join(webRoot, "public", "wasm", path.sep)),
+    );
   const source = files.map((file) => fs.readFileSync(file, "utf8")).join("\n");
   const forbidden = [
     /navigator\s*\?*\.\s*(usb|hid|bluetooth)/i,
@@ -34,7 +33,23 @@ test("product surface keeps storage and read-only serial authority in designated
   const wasmOwners = files
     .filter((file) => /\.wasm\b|WebAssembly/.test(fs.readFileSync(file, "utf8")))
     .map((file) => path.relative(webRoot, file).replaceAll("\\", "/"));
-  assert.deepEqual(wasmOwners.sort(), ["public/sw.js", "src/connection/readonly-fc-connection.mjs"]);
+  assert.deepEqual(wasmOwners, ["src/pwa-register.ts"]);
+
+  const pwaRegistration = fs.readFileSync(path.join(webRoot, "src", "pwa-register.ts"), "utf8");
+  assert.match(pwaRegistration, /OFFLINE_RUNTIME_ASSET_PATHS/);
+  assert.match(pwaRegistration, /new URL\(relativePath, baseUrl\)\.href/);
+  assert.doesNotMatch(pwaRegistration, /["']\/wasm\//);
+
+  const connection = fs.readFileSync(
+    path.join(webRoot, "src", "connection", "readonly-fc-connection.mjs"),
+    "utf8",
+  );
+  assert.match(connection, /from "virtual:ade-web-readonly-serial-wasm"/);
+  assert.match(connection, /await initReadonlySerialWasm\(\)/);
+  assert.doesNotMatch(connection, /["']\/wasm\//);
+
+  const worker = fs.readFileSync(path.join(webRoot, "public", "sw.js"), "utf8");
+  assert.match(worker, /relativePath\.startsWith\("wasm\/"\)/);
 
   const adapter = path.join(webRoot, "src", "storage", "indexeddb-journal-store.ts");
   const outsideAdapter = files
@@ -59,7 +74,13 @@ test("product surface keeps storage and read-only serial authority in designated
   const serialSource = fs.readFileSync(serialAdapter, "utf8");
   const serialTypes = fs.readFileSync(serialDeclaration, "utf8");
   assert.match(serialSource, /globalThis\.navigator\?\.serial/);
-  assert.match(serialSource, /from "\/wasm\/ade_web_readonly_serial_wasm_bridge\.js"/);
+  assert.match(serialSource, /from "virtual:ade-web-readonly-serial-wasm"/);
+  const vite = fs.readFileSync(path.join(webRoot, "vite.config.ts"), "utf8");
+  assert.match(vite, /ADE_WEB_BASE_PATH/);
+  assert.match(vite, /virtual:ade-web-readonly-serial-wasm/);
+  assert.match(vite, /readonlyWasmGlue = `\$\{base\}wasm\/ade_web_readonly_serial_wasm_bridge\.js`/);
+  assert.match(vite, /readonlyWasmBinary = `\$\{base\}wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm`/);
+  assert.match(vite, /module_or_path: new URL/);
   assert.match(serialSource, /new WasmReadonlySerialDiscovery\(\)/);
   assert.match(serialSource, /instanceof WasmReadonlySerialDirective/);
   assert.match(serialSource, /async discover\(\)/);
@@ -78,6 +99,8 @@ test("the only network primitive is the guarded same-origin service worker fetch
     .join("\n");
   const worker = fs.readFileSync(path.join(webRoot, "public", "sw.js"), "utf8");
   assert.doesNotMatch(appSource, /\bfetch\s*\(/);
-  assert.match(worker, /url\.origin !== self\.location\.origin/);
+  assert.match(worker, /url\.origin === APP_BASE_URL\.origin/);
+  assert.match(worker, /url\.pathname\.startsWith\(APP_BASE_URL\.pathname\)/);
+  assert.match(worker, /if \(!isWithinScope\(url\)\) return/);
   assert.match(worker, /request\.method !== "GET"/);
 });

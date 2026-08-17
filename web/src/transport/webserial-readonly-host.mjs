@@ -1,7 +1,7 @@
 import {
   WasmReadonlySerialDirective,
   WasmReadonlySerialDiscovery,
-} from "/wasm/ade_web_readonly_serial_wasm_bridge.js";
+} from "virtual:ade-web-readonly-serial-wasm";
 
 import {
   DiagnosticTraceRecorder,

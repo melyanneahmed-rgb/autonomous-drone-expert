@@ -7,7 +7,10 @@
 # Node / npm (policy-only Web package; no runtime dependencies integrated yet)
 node_modules/
 .npm/
+**/.gradle/
+android/local.properties
 dist/
+web/public/wasm/
 build/
 *.tsbuildinfo
 
