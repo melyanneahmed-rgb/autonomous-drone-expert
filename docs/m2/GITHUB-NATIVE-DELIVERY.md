@@ -51,6 +51,14 @@ The production delivery test builds an old commit identity and a new commit iden
 
 The checkout has credential persistence disabled. The Web build job has `actions: read` and `contents: read`; only its dependent deployment job receives the officially required `pages: write` and `id-token: write`. The Android job has only `actions: read` and `contents: read`.
 
+## Selected GitHub Actions policy
+
+The repository permits only an explicit selected-action set. `policy/github-actions-allowlist.json` separates the six immutable full-SHA references required by the owner-controlled delivery workflows from one temporary, explicitly scoped canonical-CI exception: `actions/checkout@v7.0.1`.
+
+Delivery contract tests require every Web Preview and Android `uses:` reference to be a full 40-character SHA, require the delivery set to contain no unused entry, and fail if the canonical-CI tag appears in either delivery workflow. The canonical CI workflow is likewise constrained to the single declared exception so the tag cannot silently spread.
+
+The repository Actions setting must eventually match this exact selected set. A mismatch fails at workflow startup before checkout, builds, artifact upload, or deployment; enabling all marketplace actions is neither required nor intended. Converting the canonical CI checkout tag to a reviewed immutable SHA remains a separate follow-up and is not part of this delivery correction.
+
 ## Pages availability and confidentiality boundary
 
 GitHub's current documentation makes plan and repository visibility relevant to Pages availability, and a Pages site may be publicly reachable even when its source repository is private. The GitHub integration used during implementation could read the private repository but received `403 Resource not accessible by integration` from the Pages API, so repository-specific Pages enablement cannot be truthfully pre-certified here. The first official deployment is the fail-closed availability check.
