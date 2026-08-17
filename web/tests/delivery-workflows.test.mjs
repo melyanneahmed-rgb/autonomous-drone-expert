@@ -12,6 +12,9 @@ const actionPolicy = JSON.parse(
   ),
 );
 const deliveryActionAllowlist = new Set(actionPolicy.delivery_actions);
+const deliveryTransitiveActionAllowlist = new Set(
+  actionPolicy.delivery_transitive_actions,
+);
 
 function workflow(name) {
   return fs.readFileSync(path.join(repositoryRoot, ".github", "workflows", name), "utf8");
@@ -46,12 +49,40 @@ function assertImmutableDeliveryActions(source) {
   }
 }
 
-test("delivery workflows use exactly the immutable selected-action allowlist", () => {
+test("delivery workflows use exactly the direct immutable selected-action allowlist", () => {
   const references = new Set([
     ...actionReferences(workflow("web-preview.yml")),
     ...actionReferences(workflow("android-apk.yml")),
   ]);
+  assert.equal(actionPolicy.delivery_actions.length, deliveryActionAllowlist.size);
   assert.deepEqual([...references].sort(), [...deliveryActionAllowlist].sort());
+});
+
+test("transitive selected actions remain separate, exact, and immutable", () => {
+  const expected = [
+    "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f",
+  ];
+  assert.deepEqual(actionPolicy.delivery_transitive_actions, expected);
+  assert.deepEqual([...deliveryTransitiveActionAllowlist], expected);
+
+  for (const reference of [
+    ...deliveryActionAllowlist,
+    ...deliveryTransitiveActionAllowlist,
+  ]) {
+    assert.match(reference, /^actions\/[A-Za-z0-9_.-]+@[0-9a-f]{40}$/);
+    assert.doesNotMatch(reference, /\*/, `wildcard selected action: ${reference}`);
+    assert.ok(
+      !actionPolicy.canonical_ci_temporary_exceptions.includes(reference),
+      `canonical CI exception spread into delivery policy: ${reference}`,
+    );
+  }
+
+  for (const reference of deliveryTransitiveActionAllowlist) {
+    assert.ok(
+      !deliveryActionAllowlist.has(reference),
+      `transitive action leaked into direct workflow policy: ${reference}`,
+    );
+  }
 });
 
 test("temporary canonical CI tag exception remains confined to canonical CI", () => {
