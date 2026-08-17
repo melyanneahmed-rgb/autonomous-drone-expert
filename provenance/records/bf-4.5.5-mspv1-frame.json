@@ -38,4 +38,3 @@
   },
   "notes": "MSP_FRAME is the fixed local diagnostic phase token for validation of the recorded MSPv1 serial frame; it is not a command identifier. Encoder src/main/msp/msp_serial.c lines 319-349; decoder lines 128-213 (blob 07718b57...). Little-endian from src/main/common/streambuf.c lines 40-52 (blob 74fdf2a0...). Resolved commit 4adbd3ef7cb546947600e5f747bd5453c9573063 @ tag 4.5.5."
 }
-

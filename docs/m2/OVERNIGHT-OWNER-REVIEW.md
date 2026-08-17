@@ -28,7 +28,7 @@ evidence boundary:
 | PR #21 | Draft/open/unmerged; `3cb6516e0c93248d1f68d7e09a21e951f34c9e58` |
 | PR #21 canonical CI | Run #104 / ID `31974704560`; all eight jobs passed |
 | Diagnostic base | exact PR #18 head and tree above |
-| Diagnostic canonical CI | recorded in the stacked Draft after the exact published head is tested |
+| Diagnostic canonical CI | the final exact-head run is recorded in the stacked Draft body and PR checks because this dossier is itself part of the tested head |
 
 ## Work A: delivery allowlist hardening
 
@@ -179,18 +179,25 @@ The production browser evidence string remains:
 
 `SOFTWARE_EXERCISED;REAL_CHROME_EXERCISED;PHYSICAL_FC_NOT_TESTED;HARDWARE_OBSERVED=NO`
 
-Generated asset evidence before canonical Linux execution:
+Generated asset evidence:
 
 - local raw WASM input SHA-256:
   `dd07c8c3184c0dcfea81493e5af07df031738bc2811680ffe942eab46ea33a3e`
 - generated JavaScript SHA-256:
   `c383a32030cb6e361bed425be8a7ee1b1872fc8d270b9fdb90b15ab1d6d59f75`
-- generated WASM SHA-256:
+- rejected local Windows generated WASM SHA-256:
   `b0d5c7ac3ff543a0036549717ccb9aa56d7671193d3d40b91553189484e6625d`
+- trusted canonical Linux generated WASM SHA-256:
+  `3ddaed07385e83d02b68d5f3269c9c98ce009da12dae8d6415120ac70a2b3d2f`
 - generated JavaScript size: 23,057 bytes
 - generated WASM size: 62,173 bytes
 - `web/package-lock.json` SHA-256:
   `c3015e9454da094d307975921b8aa2c195a15b9dffe0498a9c758b57d922c05d`
+
+Canonical Run #107 exposed the Linux output through a temporary failure-only diagnostic after
+Run #106 proved the Windows-generated WASM did not reproduce. The recovered artifact had the
+expected WASM v1 header, exact reported SHA-256, and unchanged size. The diagnostic code is absent
+from the final head; the final canonical run must reproduce the committed Linux bytes directly.
 
 ## Owner review sequence
 
