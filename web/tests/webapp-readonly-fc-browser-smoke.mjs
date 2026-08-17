@@ -103,6 +103,10 @@ function installFakeSerial(scenario) {
       this.writerReleased = 0;
       this.readerCancelled = 0;
       this.openOptions = null;
+      this.serialNumber = "SERIAL-SECRET-123";
+      this.usbVendorId = "VID_1234";
+      this.usbProductId = "PID_ABCD";
+      this.path = "COM99:/private/path/raw-device-name";
       this.readable = {
         getReader: () => ({
           read: () => this.queue.length > 0
@@ -142,7 +146,9 @@ function installFakeSerial(scenario) {
       this.requestCount += 1;
       this.userActivationAtRequest = navigator.userActivation?.isActive === true;
       if (scenario === "cancelled") {
-        const error = new Error("owner cancelled");
+        const error = new Error(
+          "COM99 SERIAL-SECRET-123 VID_1234 PID_ABCD /private/path raw-device-name",
+        );
         error.name = "NotFoundError";
         throw error;
       }
@@ -153,7 +159,16 @@ function installFakeSerial(scenario) {
     configurable: true,
     value: scenario === "unavailable" ? undefined : serial,
   });
-  globalThis.__ADE_SERIAL_PROBE__ = { scenario, serial, port };
+  const clipboardWrites = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      async writeText(value) {
+        clipboardWrites.push(value);
+      },
+    },
+  });
+  globalThis.__ADE_SERIAL_PROBE__ = { scenario, serial, port, clipboardWrites };
 }
 
 function fakeSerialSource(scenario) {
@@ -226,14 +241,14 @@ async function waitForTerminalPhase(evaluate, label) {
   throw new Error(`${label}: no terminal phase; got ${last}`);
 }
 
-async function activateConnectionFromTrustedKeyboardGesture(send, evaluate) {
+async function activateButtonFromTrustedKeyboardGesture(send, evaluate, selector) {
   const focused = await evaluate(`(() => {
-    const button = document.querySelector('.connection-card button');
+    const button = document.querySelector(${JSON.stringify(selector)});
     if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
     button.focus({ preventScroll: false });
     return document.activeElement === button;
   })()`);
-  if (!focused) throw new Error("PRODUCTION_CONNECTION_BUTTON_NOT_FOCUSABLE");
+  if (!focused) throw new Error(`PRODUCTION_BUTTON_NOT_FOCUSABLE:${selector}`);
   const key = {
     key: "Enter",
     code: "Enter",
@@ -250,6 +265,14 @@ async function activateConnectionFromTrustedKeyboardGesture(send, evaluate) {
     windowsVirtualKeyCode: key.windowsVirtualKeyCode,
     nativeVirtualKeyCode: key.nativeVirtualKeyCode,
   });
+}
+
+async function activateConnectionFromTrustedKeyboardGesture(send, evaluate) {
+  await activateButtonFromTrustedKeyboardGesture(
+    send,
+    evaluate,
+    ".connection-card > button",
+  );
 }
 
 async function runScenario(browser, url, scenario, expectedPhase) {
@@ -317,6 +340,38 @@ async function runScenario(browser, url, scenario, expectedPhase) {
           `bounded diagnostic ${JSON.stringify(boundedDiagnostic)}`,
       );
     }
+    const diagnosticBefore = await control.evaluate(`(() => {
+      const panel = document.querySelector('[data-diagnostic-trace="temporary"]');
+      return {
+        exists: panel instanceof HTMLDetailsElement,
+        initiallyCollapsed: panel instanceof HTMLDetailsElement && !panel.open,
+        traceCount: document.querySelectorAll('.diagnostic-trace-events li').length,
+        traceLayers: [...document.querySelectorAll('[data-trace-layer]')].map((node) => node.dataset.traceLayer),
+        traceEvents: [...document.querySelectorAll('.diagnostic-trace-events li')].map((node) => node.textContent ?? ''),
+      };
+    })()`);
+    await control.evaluate(`(() => {
+      const panel = document.querySelector('[data-diagnostic-trace="temporary"]');
+      if (panel instanceof HTMLDetailsElement) panel.open = true;
+    })()`);
+    await activateButtonFromTrustedKeyboardGesture(
+      control.send,
+      control.evaluate,
+      ".diagnostic-trace-actions button:first-of-type",
+    );
+    await delay(50);
+    const copiedText = await control.evaluate(
+      "globalThis.__ADE_SERIAL_PROBE__?.clipboardWrites?.at(-1) ?? ''",
+    );
+    await activateButtonFromTrustedKeyboardGesture(
+      control.send,
+      control.evaluate,
+      ".diagnostic-trace-actions button:nth-of-type(2)",
+    );
+    await delay(50);
+    const clearedCount = await control.evaluate(
+      "document.querySelectorAll('.diagnostic-trace-events li').length",
+    );
     return await control.evaluate(`(() => {
       const probe = globalThis.__ADE_SERIAL_PROBE__;
       const fields = Object.fromEntries(
@@ -336,6 +391,9 @@ async function runScenario(browser, url, scenario, expectedPhase) {
         closeCount: probe.port.closeCount,
         readerReleased: probe.port.readerReleased,
         writerReleased: probe.port.writerReleased,
+        diagnostic: ${JSON.stringify(diagnosticBefore)},
+        copiedText: ${JSON.stringify(copiedText)},
+        clearedCount: ${JSON.stringify(clearedCount)},
       };
     })()`);
   } catch (error) {
@@ -370,6 +428,15 @@ try {
     success.fields.apiVersion !== "1.46" || success.fields.fcVariant !== "BTFL" ||
     success.fields.fcVersion !== "4.5.5" || success.fields.targetName !== "SPEEDYBEEF405V4"
   ) throw new Error(`PRODUCTION_IN_SCOPE_PROOF_FAILED:${JSON.stringify(success)}`);
+  if (
+    !success.diagnostic.exists || !success.diagnostic.initiallyCollapsed ||
+    success.diagnostic.traceCount === 0 || success.clearedCount !== 0 ||
+    !success.copiedText.startsWith("FPV_ARBCON_READONLY_DIAGNOSTIC_TRACE_V1\n") ||
+    !success.diagnostic.traceLayers.includes("RUST") ||
+    !success.diagnostic.traceLayers.includes("MSP") ||
+    !success.diagnostic.traceEvents.some((event) => event.includes("FINAL_OK")) ||
+    /SPEEDYBEEF405V4|BTFL|36,77|usbVendorId|usbProductId/i.test(success.copiedText)
+  ) throw new Error(`PRODUCTION_DIAGNOSTIC_PANEL_PROOF_FAILED:${JSON.stringify(success)}`);
 
   const mismatch = await runScenario(browser, url, "scope-mismatch", "scope-mismatch");
   if (
@@ -388,8 +455,13 @@ try {
     typedFailure.fields.failure !== "ProtocolIdentityFailure" ||
     typedFailure.fields.failureStage !== "BOARD_INFO" ||
     typedFailure.fields.failureReason !== "TrailingPayload" ||
+    typedFailure.fields.failureOrigin !== "IDENTITY_STAGE" ||
     typedFailure.closeCount !== 1
   ) throw new Error(`PRODUCTION_TYPED_DIAGNOSTIC_PROOF_FAILED:${JSON.stringify(typedFailure)}`);
+  if (
+    !typedFailure.diagnostic.traceEvents.some((event) => event.includes("IDENTITY_STAGE_FAILED")) ||
+    !typedFailure.diagnostic.traceEvents.some((event) => event.includes("TrailingPayload"))
+  ) throw new Error(`PRODUCTION_TYPED_TRACE_PROOF_FAILED:${JSON.stringify(typedFailure)}`);
 
   const cancelled = await runScenario(browser, url, "cancelled", "cancelled");
   if (cancelled.requestCount !== 1 || cancelled.writes.length !== 0 || cancelled.openCount !== 0) {
@@ -407,6 +479,15 @@ try {
     if (run.writes.some((frame) => prohibitedCommands.has(frame[4]))) {
       throw new Error("PRODUCTION_UI_WRITE_AUTHORITY_FAILED");
     }
+    if (
+      !run.diagnostic.initiallyCollapsed || run.diagnostic.traceCount === 0 ||
+      run.clearedCount !== 0 || !run.copiedText.includes("FINAL_")
+    ) throw new Error("PRODUCTION_UI_DIAGNOSTIC_LIFECYCLE_FAILED");
+    if (
+      /COM99|SERIAL-SECRET-123|VID_1234|PID_ABCD|\/private\/path|raw-device-name/.test(
+        `${run.text}\n${run.copiedText}\n${JSON.stringify(run.fields)}`,
+      )
+    ) throw new Error("PRODUCTION_UI_DIAGNOSTIC_PRIVACY_ATTACK_FAILED");
   }
   for (const asset of [
     "/wasm/ade_web_readonly_serial_wasm_bridge.js",

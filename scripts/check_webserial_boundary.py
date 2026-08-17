@@ -15,6 +15,8 @@ ADAPTER = PurePosixPath("web/src/transport/webserial-readonly-host.mjs")
 DECLARATION = PurePosixPath("web/src/transport/webserial-readonly-host.d.mts")
 FACADE = PurePosixPath("web/src/connection/readonly-fc-connection.mjs")
 FACADE_DECLARATION = PurePosixPath("web/src/connection/readonly-fc-connection.d.mts")
+DIAGNOSTIC_TRACE = PurePosixPath("web/src/diagnostics/readonly-trace.mjs")
+DIAGNOSTIC_TRACE_DECLARATION = PurePosixPath("web/src/diagnostics/readonly-trace.d.mts")
 APP = PurePosixPath("web/src/App.tsx")
 DERIVED_ASSETS = {
     PurePosixPath("web/public/wasm/ade_web_readonly_serial_wasm_bridge.js"),
@@ -50,11 +52,19 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
         errors.append(f"missing first-party Web Serial declaration: {DECLARATION}")
     facade = files.get(FACADE)
     facade_declaration = files.get(FACADE_DECLARATION)
+    diagnostic_trace = files.get(DIAGNOSTIC_TRACE)
+    diagnostic_declaration = files.get(DIAGNOSTIC_TRACE_DECLARATION)
     app = files.get(APP)
     if facade is None:
         errors.append(f"missing product read-only connection facade: {FACADE}")
     if facade_declaration is None:
         errors.append(f"missing product read-only connection declaration: {FACADE_DECLARATION}")
+    if diagnostic_trace is None:
+        errors.append(f"missing privacy-bounded diagnostic trace: {DIAGNOSTIC_TRACE}")
+    if diagnostic_declaration is None:
+        errors.append(
+            f"missing privacy-bounded diagnostic trace declaration: {DIAGNOSTIC_TRACE_DECLARATION}"
+        )
     if app is None:
         errors.append(f"missing approved React product surface: {APP}")
 
@@ -80,6 +90,8 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
         "acceptExchangeFailure",
         "failureStage: discovery.failureStage ?? undefined",
         "failureReason: discovery.failureReason ?? undefined",
+        "failureOrigin:",
+        "takeTraceEvent",
         "releaseLock",
         "close",
     )
@@ -172,6 +184,27 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
         if re.search(r"\b(?:constructor|serial\?|host\?|bindings|factory|command|payload)\b", facade_declaration, re.IGNORECASE):
             errors.append("product facade declaration exposes replaceable or selectable authority")
 
+    if diagnostic_trace is not None:
+        for marker in (
+            "DIAGNOSTIC_TRACE_CAPACITY = 200",
+            "capacity < 100 || capacity > 250",
+            "ALLOWED_KEYS",
+            "beginAttempt()",
+            "snapshot()",
+            "clear()",
+            "formatSafeDiagnosticTrace",
+        ):
+            if marker not in diagnostic_trace:
+                errors.append(f"diagnostic trace missing bounded behavior: {marker}")
+        forbidden_diagnostic = (
+            r"\b(?:console\.|localStorage|sessionStorage|indexedDB|document\.cookie)\b",
+            r"\b(?:fetch|XMLHttpRequest|WebSocket|sendBeacon)\s*\(?",
+            r"raw.?bytes|raw.?frame|raw.?payload|usbVendorId|usbProductId|serial.?number|port.?info",
+        )
+        for pattern in forbidden_diagnostic:
+            if re.search(pattern, diagnostic_trace, re.IGNORECASE):
+                errors.append("diagnostic trace gained a forbidden data field or outbound sink")
+
     if app is not None:
         if (
             'from "./connection/readonly-fc-connection.mjs"' not in app
@@ -229,11 +262,11 @@ def repository_errors(root: Path = ROOT) -> list[str]:
     adapter_path = root / ADAPTER
     declaration_path = root / DECLARATION
     if adapter_path.is_file() and hashlib.sha256(adapter_path.read_bytes()).hexdigest() != (
-        "b45009fac582e7c33f761c71ed58201c0fe2cf4b3d7587d6aae9aad1227b3309"
+        "9a8bb955292bad61a20062e41b92c8ca1cdb66b3d7d2d9110fbc8cad179385f9"
     ):
         errors.append("accepted production Web Serial host source drifted")
     if declaration_path.is_file() and hashlib.sha256(declaration_path.read_bytes()).hexdigest() != (
-        "03d6442a8a9b862e93857029c38a28c78c5cb56d2b8631dd12504a03bbfb9a01"
+        "fed3d8e35d89a95b4efd20a53044d83748421fe5c23927d21b83d576c3d3ac0a"
     ):
         errors.append("accepted production Web Serial host declaration drifted")
     errors.extend(verify_webserial_product_assets.verify(root=root))
@@ -249,6 +282,8 @@ def repository_errors(root: Path = ROOT) -> list[str]:
             "MspV1ResponseAccumulator",
             "WriteCommandClass::NoWrite",
             "packet.approval().is_some()",
+            "TRACE_EVENT_LIMIT",
+            "take_trace_event",
         ):
             if marker not in serial_bridge:
                 errors.append(f"Rust serial authority proof missing: {marker}")

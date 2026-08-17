@@ -12,6 +12,8 @@ const facade = read("src/connection/readonly-fc-connection.mjs");
 const facadeTypes = read("src/connection/readonly-fc-connection.d.mts");
 const host = read("src/transport/webserial-readonly-host.mjs");
 const hostTypes = read("src/transport/webserial-readonly-host.d.mts");
+const diagnostic = read("src/diagnostics/readonly-trace.mjs");
+const diagnosticTypes = read("src/diagnostics/readonly-trace.d.mts");
 const viteConfig = read("vite.config.ts");
 const acceptedBrowser = read("tests/browser/webserial-readonly-smoke.mjs");
 const productionBrowser = read("tests/webapp-readonly-fc-browser-smoke.mjs");
@@ -28,10 +30,10 @@ function numericFixture(source, declaration) {
 }
 
 test("the bounded production host and declaration are byte-locked", () => {
-  assert.equal(sha256(host), "b45009fac582e7c33f761c71ed58201c0fe2cf4b3d7587d6aae9aad1227b3309");
+  assert.equal(sha256(host), "9a8bb955292bad61a20062e41b92c8ca1cdb66b3d7d2d9110fbc8cad179385f9");
   assert.equal(
     sha256(hostTypes),
-    "03d6442a8a9b862e93857029c38a28c78c5cb56d2b8631dd12504a03bbfb9a01",
+    "fed3d8e35d89a95b4efd20a53044d83748421fe5c23927d21b83d576c3d3ac0a",
   );
 });
 
@@ -116,6 +118,7 @@ test("UI output and state are privacy bounded and make no hardware claim", () =>
     "targetName",
     "scopeMismatchField",
     "failure",
+    "failureOrigin",
     "failureStage",
     "failureReason",
   ];
@@ -156,5 +159,43 @@ test("UI output and state are privacy bounded and make no hardware claim", () =>
     "failed",
   ]) {
     assert.ok(app.includes(`"${phase}"`), `missing bounded UI phase: ${phase}`);
+  }
+});
+
+test("diagnostic UI is collapsed, RAM-only, owner-copyable, and owner-clearable", () => {
+  assert.match(app, /<details className="diagnostic-trace" data-diagnostic-trace="temporary">/);
+  assert.doesNotMatch(app, /<details[^>]*\bopen(?:=|\s|>)/);
+  assert.match(app, /prepared\.safeDiagnosticTraceText\(\)/);
+  assert.match(app, /readonlyFcConnection\.current\?\.clearDiagnosticTrace\(\)/);
+  assert.match(host, /discovery\.takeTraceEvent\(\)/);
+  assert.match(diagnostic, /DIAGNOSTIC_TRACE_CAPACITY = 200/);
+  assert.match(diagnostic, /capacity < 100 \|\| capacity > 250/);
+  assert.match(diagnostic, /this\.#events\.splice\(0, this\.#events\.length - this\.#capacity\)/);
+  assert.doesNotMatch(
+    `${diagnostic}\n${host}`,
+    /console\.|localStorage|sessionStorage|indexedDB|document\.cookie|fetch\(|XMLHttpRequest|WebSocket|sendBeacon/,
+  );
+  assert.doesNotMatch(
+    `${diagnostic}\n${diagnosticTypes}`,
+    /rawBytes|rawFrame|rawPayload|usbVendorId|usbProductId|serialNumber|portInfo/i,
+  );
+  for (const layer of ["UI", "HOST", "RUST", "SERIAL", "MSP", "CLEANUP"]) {
+    assert.ok(diagnostic.includes(`"${layer}"`), `missing diagnostic layer: ${layer}`);
+  }
+  for (const origin of [
+    "PORT_SELECTION",
+    "PORT_OPEN",
+    "WRITER_ACQUISITION",
+    "READER_ACQUISITION",
+    "SERIAL_WRITE",
+    "SERIAL_READ",
+    "SERIAL_TIMEOUT",
+    "MSP_FRAME",
+    "IDENTITY_STAGE",
+    "DIRECTIVE_REFUSAL",
+    "PORT_CLOSE",
+    "UI_BOUNDARY",
+  ]) {
+    assert.ok(diagnostic.includes(`"${origin}"`), `missing fixed diagnostic origin: ${origin}`);
   }
 });

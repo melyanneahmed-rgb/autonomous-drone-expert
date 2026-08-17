@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const browserRoot = path.join(webRoot, "tests", "browser");
 const hostPath = path.join(webRoot, "src", "transport", "webserial-readonly-host.mjs");
+const diagnosticPath = path.join(webRoot, "src", "diagnostics", "readonly-trace.mjs");
 const glueRoot = path.resolve(
   process.argv[2] ?? path.join(path.dirname(webRoot), "target", "webserial-wasm-web"),
 );
@@ -46,6 +47,7 @@ function serve() {
     ["/", ["text/html; charset=utf-8", fs.readFileSync(path.join(browserRoot, "webserial-readonly-smoke.html"))]],
     ["/webserial-readonly-smoke.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(path.join(browserRoot, "webserial-readonly-smoke.mjs"))]],
     ["/webserial-readonly-host.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(hostPath)]],
+    ["/diagnostics/readonly-trace.mjs", ["text/javascript; charset=utf-8", fs.readFileSync(diagnosticPath)]],
     ["/wasm/ade_web_readonly_serial_wasm_bridge.js", ["text/javascript; charset=utf-8", fs.readFileSync(glueJs)]],
     ["/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm", ["application/wasm", fs.readFileSync(glueWasm)]],
   ]);
@@ -156,12 +158,12 @@ try {
   const port = await listen(server);
   const result = await runBrowser(browser, `http://127.0.0.1:${port}/`, profile);
   const fetched = servedRequests.includes("/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm");
-  if (result.state !== "pass" || result.output !== "WEB_SERIAL_READONLY_BROWSER_PASS:A+B+C+D+E+F+G+H" || !fetched) {
+  if (result.state !== "pass" || result.output !== "WEB_SERIAL_READONLY_BROWSER_PASS:A+B+C+D+E+F+G+H+I+J" || !fetched) {
     console.error(`REAL_BROWSER_WEB_SERIAL_FAILED (${result.output})`);
     console.error(result.stderr.slice(-4000));
     process.exitCode = 1;
   } else {
-    console.log("real-browser Rust WASM + Web Serial read-only gate passed (A-H)");
+    console.log("real-browser Rust WASM + Web Serial read-only gate passed (A-J)");
   }
 } catch (error) {
   console.error(`WEB_SERIAL_BROWSER_REQUESTS:${servedRequests.join(",")}`);
