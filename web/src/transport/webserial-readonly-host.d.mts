@@ -1,3 +1,8 @@
+import type {
+  DiagnosticOrigin,
+  DiagnosticTraceEvent,
+} from "../diagnostics/readonly-trace.mjs";
+
 export type WebSerialFailure =
   | "Unavailable"
   | "Cancelled"
@@ -10,6 +15,7 @@ export type WebSerialFailure =
 export interface PortSelectionResult {
   ok: boolean;
   failure?: WebSerialFailure;
+  failureOrigin?: DiagnosticOrigin;
 }
 
 export type IdentityFailureStage =
@@ -39,6 +45,7 @@ export type IdentityFailureReason =
 export interface ReadonlyDiscoveryResult {
   outcome: "in-scope" | "scope-mismatch" | "failed" | "pending";
   failure?: string;
+  failureOrigin?: DiagnosticOrigin;
   failureStage?: IdentityFailureStage;
   failureReason?: IdentityFailureReason;
   scopeMismatchField?: string;
@@ -53,6 +60,11 @@ export declare class WebSerialReadonlyHost {
   constructor(options?: { serial?: object; timeoutMs?: number });
   selectPortFromUserGesture(): Promise<PortSelectionResult>;
   discover(): Promise<ReadonlyDiscoveryResult>;
+  recordUiBoundaryFailure(): void;
+  recordHardwareEvidenceBoundary(): void;
+  diagnosticTrace(): readonly DiagnosticTraceEvent[];
+  safeDiagnosticTraceText(): string;
+  clearDiagnosticTrace(): void;
 }
 
 export declare const WEB_SERIAL_READONLY_INITIAL_BAUD_RATE: 115200;

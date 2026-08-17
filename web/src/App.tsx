@@ -6,6 +6,7 @@ import type {
   PrivacyBoundedIdentityResult,
   ReadonlyFcConnection,
 } from "./connection/readonly-fc-connection.mjs";
+import type { DiagnosticTraceEvent } from "./diagnostics/readonly-trace.mjs";
 
 type SetupProfile = "cinematic" | "freestyle" | "racing" | "long-range";
 type FirmwareSource = "online" | "manual";
@@ -189,6 +190,12 @@ export default function App() {
     phase: "preparing",
   });
   const readonlyFcConnection = useRef<ReadonlyFcConnection | null>(null);
+  const [diagnosticTrace, setDiagnosticTrace] = useState<
+    readonly DiagnosticTraceEvent[]
+  >([]);
+  const [diagnosticCopyState, setDiagnosticCopyState] = useState<
+    "idle" | "copied" | "failed"
+  >("idle");
   const [extraGoals, setExtraGoals] = useState<string[]>([
     "حماية المحركات",
     "إنقاذ GPS",
@@ -292,8 +299,11 @@ export default function App() {
     }
 
     setConnection({ phase: "selecting" });
+    setDiagnosticTrace([]);
+    setDiagnosticCopyState("idle");
     try {
       const selection = await prepared.selectPortFromUserGesture();
+      setDiagnosticTrace(prepared.diagnosticTrace());
       if (!selection.ok) {
         if (selection.failure === "Cancelled") {
           setConnection({ phase: "cancelled" });
@@ -302,7 +312,11 @@ export default function App() {
         } else {
           setConnection({
             phase: "failed",
-            result: { outcome: "failed", failure: selection.failure ?? "Unknown" },
+            result: {
+              outcome: "failed",
+              failure: selection.failure ?? "Unknown",
+              failureOrigin: selection.failureOrigin,
+            },
           });
         }
         return;
@@ -310,6 +324,7 @@ export default function App() {
 
       setConnection({ phase: "reading-identity" });
       const result = await prepared.discover();
+      setDiagnosticTrace(prepared.diagnosticTrace());
       if (result.outcome === "in-scope") {
         setConnection({ phase: "read-complete", result });
       } else if (result.outcome === "scope-mismatch") {
@@ -318,11 +333,39 @@ export default function App() {
         setConnection({ phase: "failed", result });
       }
     } catch {
+      prepared.recordUiBoundaryFailure();
+      setDiagnosticTrace(prepared.diagnosticTrace());
       setConnection({
         phase: "failed",
-        result: { outcome: "failed", failure: "Unknown" },
+        result: {
+          outcome: "failed",
+          failure: "Unknown",
+          failureOrigin: "UI_BOUNDARY",
+        },
       });
     }
+  }
+
+  async function copyDiagnosticTrace() {
+    const prepared = readonlyFcConnection.current;
+    if (!prepared || diagnosticTrace.length === 0) return;
+    try {
+      const writeText = globalThis.navigator?.clipboard?.writeText;
+      if (!writeText) throw new Error("CLIPBOARD_UNAVAILABLE");
+      await writeText.call(
+        globalThis.navigator.clipboard,
+        prepared.safeDiagnosticTraceText(),
+      );
+      setDiagnosticCopyState("copied");
+    } catch {
+      setDiagnosticCopyState("failed");
+    }
+  }
+
+  function clearDiagnosticTrace() {
+    readonlyFcConnection.current?.clearDiagnosticTrace();
+    setDiagnosticTrace([]);
+    setDiagnosticCopyState("idle");
   }
 
   return (
@@ -892,6 +935,12 @@ export default function App() {
                       <dd>{connection.result.failure}</dd>
                     </div>
                   )}
+                  {connection.result.failureOrigin && (
+                    <div data-identity-field="failureOrigin">
+                      <dt>موضع التوقف</dt>
+                      <dd>{connection.result.failureOrigin}</dd>
+                    </div>
+                  )}
                   {connection.result.failureStage && (
                     <div data-identity-field="failureStage">
                       <dt>مرحلة القراءة</dt>
@@ -906,6 +955,55 @@ export default function App() {
                   )}
                 </dl>
               )}
+              <details className="diagnostic-trace" data-diagnostic-trace="temporary">
+                <summary>
+                  <span>سجل التشخيص المؤقت</span>
+                  <b>{diagnosticTrace.length}</b>
+                </summary>
+                <p>
+                  محفوظ في الذاكرة فقط. يعرض مراحل وأعداد بايتات آمنة دون أي بايت خام أو
+                  بيانات منفذ.
+                </p>
+                <div className="diagnostic-trace-actions">
+                  <button
+                    disabled={diagnosticTrace.length === 0}
+                    onClick={() => void copyDiagnosticTrace()}
+                    type="button"
+                  >
+                    نسخ السجل الآمن
+                  </button>
+                  <button
+                    disabled={diagnosticTrace.length === 0}
+                    onClick={clearDiagnosticTrace}
+                    type="button"
+                  >
+                    مسح
+                  </button>
+                  <span aria-live="polite">
+                    {diagnosticCopyState === "copied"
+                      ? "تم النسخ"
+                      : diagnosticCopyState === "failed"
+                        ? "تعذر النسخ"
+                        : ""}
+                  </span>
+                </div>
+                {diagnosticTrace.length > 0 && (
+                  <ol className="diagnostic-trace-events" dir="ltr">
+                    {[...diagnosticTrace].reverse().map((event) => (
+                      <li key={event.sequence} data-trace-layer={event.layer}>
+                        <b>#{event.sequence}</b> {event.layer} · {event.phase} · {event.event}
+                        {event.stage ? ` · ${event.stage}` : ""}
+                        {event.command ? ` · ${event.command}` : ""}
+                        {event.byteCount !== undefined ? ` · bytes=${event.byteCount}` : ""}
+                        {event.direction ? ` · ${event.direction}` : ""}
+                        {event.failureClass ? ` · ${event.failureClass}` : ""}
+                        {event.failureReason ? ` · ${event.failureReason}` : ""}
+                        {event.origin ? ` · origin=${event.origin}` : ""}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </details>
               <small>
                 القراءة تعرض الهوية الآمنة فقط، ولا تحفظ بيانات الجهاز أو تكتب على الدرون.
               </small>

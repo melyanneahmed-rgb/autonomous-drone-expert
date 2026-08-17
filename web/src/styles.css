@@ -826,6 +826,16 @@ button {
 .connection-identity div { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 8px; padding: 3px 0; }
 .connection-identity dt { color: #93a49f; font-size: 8px; }
 .connection-identity dd { margin: 0; overflow-wrap: anywhere; color: white; direction: ltr; text-align: left; font: 700 8.5px Arial, sans-serif; }
+.diagnostic-trace { margin-top: 13px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.12); text-align: right; }
+.diagnostic-trace summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; color: #dbe6e2; font-size: 9px; font-weight: 700; }
+.diagnostic-trace summary b { min-width: 25px; padding: 3px 6px; border-radius: 999px; background: rgba(216,255,114,.12); color: var(--mint); text-align: center; font: 700 8px Arial, sans-serif; }
+.diagnostic-trace > p { margin-top: 10px; line-height: 1.55; }
+.diagnostic-trace-actions { display: grid; grid-template-columns: 1fr 58px; gap: 7px; margin-top: 9px; }
+.connection-card .diagnostic-trace-actions button { height: 31px; margin-top: 0; border: 1px solid rgba(216,255,114,.25); background: transparent; color: var(--mint); font-size: 8px; }
+.diagnostic-trace-actions span { grid-column: 1 / -1; min-height: 12px; color: #a9b9b4; font-size: 8px; text-align: center; }
+.diagnostic-trace-events { max-height: 220px; margin: 7px 0 0; padding: 8px 23px 8px 8px; overflow: auto; border-radius: 9px; background: rgba(0,0,0,.2); color: #c8d4d0; text-align: left; font: 7.5px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.diagnostic-trace-events li { padding: 3px 0; overflow-wrap: anywhere; }
+.diagnostic-trace-events b { color: var(--mint); }
 
 .local-promise { margin-top: 17px; padding: 14px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 13px; background: white; }
 .pulse-dot { width: 9px; height: 9px; border-radius: 50%; background: #3cb875; box-shadow: 0 0 0 5px rgba(60,184,117,.1); }
