@@ -4,9 +4,14 @@ import { WebSerialReadonlyHost } from "../transport/webserial-readonly-host.mjs"
 
 const WASM_ASSET_PATH = "/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm";
 
-function privacyBoundedResult(result) {
+function privacyBoundedResult(result, host) {
   if (result.hardwareObserved !== false) {
-    return { outcome: "failed", failure: "HardwareEvidenceBoundary" };
+    host.recordHardwareEvidenceBoundary();
+    return {
+      outcome: "failed",
+      failure: "HardwareEvidenceBoundary",
+      failureOrigin: "FINAL_RESULT",
+    };
   }
   return {
     outcome: result.outcome,
@@ -16,6 +21,7 @@ function privacyBoundedResult(result) {
     targetName: result.targetName,
     scopeMismatchField: result.scopeMismatchField,
     failure: result.failure,
+    failureOrigin: result.failureOrigin,
     failureStage: result.failureStage,
     failureReason: result.failureReason,
   };
@@ -30,7 +36,32 @@ class PreparedReadonlyFcConnection {
   }
 
   async discover() {
-    return privacyBoundedResult(await this.#host.discover());
+    try {
+      return privacyBoundedResult(await this.#host.discover(), this.#host);
+    } catch {
+      this.#host.recordUiBoundaryFailure();
+      return {
+        outcome: "failed",
+        failure: "Unknown",
+        failureOrigin: "UI_BOUNDARY",
+      };
+    }
+  }
+
+  recordUiBoundaryFailure() {
+    this.#host.recordUiBoundaryFailure();
+  }
+
+  diagnosticTrace() {
+    return this.#host.diagnosticTrace();
+  }
+
+  safeDiagnosticTraceText() {
+    return this.#host.safeDiagnosticTraceText();
+  }
+
+  clearDiagnosticTrace() {
+    this.#host.clearDiagnosticTrace();
   }
 }
 

@@ -8,6 +8,7 @@
 //! Raw response chunks return to the bounded Rust MSP accumulator.
 
 use core::fmt;
+use std::collections::VecDeque;
 
 use ade_core_api::{ScopeStatus, check_scope};
 use ade_execution::{
@@ -239,6 +240,125 @@ impl IdentityFailureDiagnostic {
     }
 }
 
+const TRACE_EVENT_LIMIT: usize = 32;
+
+const fn stage_label(stage: IdentificationStage) -> Option<&'static str> {
+    match stage {
+        IdentificationStage::ApiVersion => Some("API_VERSION"),
+        IdentificationStage::FcVariant => Some("FC_VARIANT"),
+        IdentificationStage::FcVersion => Some("FC_VERSION"),
+        IdentificationStage::BoardInfo => Some("BOARD_INFO"),
+        IdentificationStage::Complete => None,
+    }
+}
+
+const fn stage_command(stage: IdentificationStage) -> Option<CommandId> {
+    match stage {
+        IdentificationStage::ApiVersion => Some(CommandId::ApiVersion),
+        IdentificationStage::FcVariant => Some(CommandId::FcVariant),
+        IdentificationStage::FcVersion => Some(CommandId::FcVersion),
+        IdentificationStage::BoardInfo => Some(CommandId::BoardInfo),
+        IdentificationStage::Complete => None,
+    }
+}
+
+const fn command_label(command: CommandId) -> Option<&'static str> {
+    match command {
+        CommandId::ApiVersion => Some("MSP_API_VERSION"),
+        CommandId::FcVariant => Some("MSP_FC_VARIANT"),
+        CommandId::FcVersion => Some("MSP_FC_VERSION"),
+        CommandId::BoardInfo => Some("MSP_BOARD_INFO"),
+        _ => None,
+    }
+}
+
+const fn direction_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Request => "REQUEST",
+        Direction::Reply => "REPLY",
+        Direction::Error => "ERROR",
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RustTraceEvent {
+    layer: &'static str,
+    phase: &'static str,
+    event: &'static str,
+    stage: IdentificationStage,
+    command: CommandId,
+    byte_count: Option<u32>,
+    direction: Option<Direction>,
+    failure_class: Option<&'static str>,
+    failure_reason: Option<IdentityFailureReason>,
+    origin: Option<&'static str>,
+}
+
+/// One privacy-bounded protocol event emitted by the authoritative Rust state machine.
+///
+/// Every string getter returns a member of a fixed vocabulary. No raw frame, payload,
+/// identity value, browser error or user-controlled string is retained here.
+#[wasm_bindgen]
+pub struct WasmReadonlyTraceEvent {
+    event: RustTraceEvent,
+}
+
+#[wasm_bindgen]
+impl WasmReadonlyTraceEvent {
+    #[wasm_bindgen(getter)]
+    pub fn layer(&self) -> String {
+        self.event.layer.to_owned()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn phase(&self) -> String {
+        self.event.phase.to_owned()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn event(&self) -> String {
+        self.event.event.to_owned()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn stage(&self) -> Option<String> {
+        stage_label(self.event.stage).map(str::to_owned)
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn command(&self) -> Option<String> {
+        command_label(self.event.command).map(str::to_owned)
+    }
+
+    #[wasm_bindgen(getter, js_name = byteCount)]
+    pub fn byte_count(&self) -> Option<u32> {
+        self.event.byte_count
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn direction(&self) -> Option<String> {
+        self.event.direction.map(direction_label).map(str::to_owned)
+    }
+
+    #[wasm_bindgen(getter, js_name = failureClass)]
+    pub fn failure_class(&self) -> Option<String> {
+        self.event.failure_class.map(str::to_owned)
+    }
+
+    #[wasm_bindgen(getter, js_name = failureReason)]
+    pub fn failure_reason(&self) -> Option<String> {
+        self.event
+            .failure_reason
+            .map(IdentityFailureReason::label)
+            .map(str::to_owned)
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn origin(&self) -> Option<String> {
+        self.event.origin.map(str::to_owned)
+    }
+}
+
 /// One opaque host operation created by the Rust discovery state machine.
 #[wasm_bindgen]
 pub struct WasmReadonlySerialDirective {
@@ -336,6 +456,7 @@ pub struct WasmReadonlySerialDiscovery {
     pending_id: Option<RequestId>,
     accumulator: Option<MspV1ResponseAccumulator>,
     outcome: Option<FinalOutcome>,
+    trace_events: VecDeque<RustTraceEvent>,
 }
 
 impl WasmReadonlySerialDiscovery {
@@ -351,7 +472,82 @@ impl WasmReadonlySerialDiscovery {
             pending_id: None,
             accumulator: None,
             outcome: None,
+            trace_events: VecDeque::with_capacity(TRACE_EVENT_LIMIT),
         })
+    }
+
+    fn push_trace(&mut self, event: RustTraceEvent) {
+        if self.trace_events.len() == TRACE_EVENT_LIMIT {
+            self.trace_events.pop_front();
+        }
+        self.trace_events.push_back(event);
+    }
+
+    fn push_directive_trace(
+        &mut self,
+        stage: IdentificationStage,
+        command: CommandId,
+        byte_count: usize,
+    ) -> Result<(), BridgeError> {
+        let phase = stage_label(stage).ok_or(BridgeError::InvalidState)?;
+        let byte_count = u32::try_from(byte_count).map_err(|_| BridgeError::Boundary)?;
+        self.push_trace(RustTraceEvent {
+            layer: "RUST",
+            phase,
+            event: "DIRECTIVE",
+            stage,
+            command,
+            byte_count: Some(byte_count),
+            direction: Some(Direction::Request),
+            failure_class: None,
+            failure_reason: None,
+            origin: None,
+        });
+        Ok(())
+    }
+
+    fn push_frame_trace(
+        &mut self,
+        event: &'static str,
+        stage: IdentificationStage,
+        command: CommandId,
+        direction: Option<Direction>,
+        failure_class: Option<&'static str>,
+        failure_reason: Option<IdentityFailureReason>,
+    ) {
+        self.push_trace(RustTraceEvent {
+            layer: "MSP",
+            phase: "MSP_FRAME",
+            event,
+            stage,
+            command,
+            byte_count: None,
+            direction,
+            failure_class,
+            failure_reason,
+            origin: failure_class.map(|_| "MSP_FRAME"),
+        });
+    }
+
+    fn push_identity_trace(
+        &mut self,
+        event: &'static str,
+        stage: IdentificationStage,
+        command: CommandId,
+        failure_reason: Option<IdentityFailureReason>,
+    ) {
+        self.push_trace(RustTraceEvent {
+            layer: "RUST",
+            phase: "IDENTITY_STAGE",
+            event,
+            stage,
+            command,
+            byte_count: None,
+            direction: None,
+            failure_class: failure_reason.map(|_| "ProtocolIdentityFailure"),
+            failure_reason,
+            origin: failure_reason.map(|_| "IDENTITY_STAGE"),
+        });
     }
 
     fn begin_effect(
@@ -389,15 +585,18 @@ impl WasmReadonlySerialDiscovery {
     }
 
     fn next_exchange(&mut self) -> Result<WasmReadonlySerialDirective, BridgeError> {
+        let stage = self.identification.stage();
         let request: IdentificationRequest = self.identification.next_request()?;
         let command = request.command();
         let packet = OutboundPacket::read_only(request.bytes().to_vec())?;
         self.accumulator = Some(MspV1ResponseAccumulator::new(command));
-        self.begin_effect(
+        let directive = self.begin_effect(
             TransportEffect::Exchange(packet),
             Some(command),
             Phase::Exchanging,
-        )
+        )?;
+        self.push_directive_trace(stage, command, directive.bytes.len())?;
+        Ok(directive)
     }
 
     fn start_close(&mut self) -> Result<WasmReadonlySerialDirective, BridgeError> {
@@ -455,6 +654,8 @@ impl WasmReadonlySerialDiscovery {
         chunk: &[u8],
     ) -> Result<Option<WasmReadonlySerialDirective>, BridgeError> {
         let request_id = self.verify_pending(request_id, Phase::Exchanging)?;
+        let stage = self.identification.stage();
+        let command = stage_command(stage).ok_or(BridgeError::InvalidState)?;
         let progress = match self
             .accumulator
             .as_mut()
@@ -463,8 +664,15 @@ impl WasmReadonlySerialDiscovery {
         {
             Ok(progress) => progress,
             Err(error) => {
-                let diagnostic =
-                    IdentityFailureDiagnostic::from_msp(self.identification.stage(), &error);
+                let diagnostic = IdentityFailureDiagnostic::from_msp(stage, &error);
+                self.push_frame_trace(
+                    "FRAME_REJECTED",
+                    stage,
+                    command,
+                    None,
+                    Some("MalformedResponse"),
+                    Some(diagnostic.reason),
+                );
                 return self
                     .fail_exchange(request_id, "MalformedResponse", Some(diagnostic))
                     .map(Some);
@@ -474,6 +682,15 @@ impl WasmReadonlySerialDiscovery {
             return Ok(None);
         };
 
+        self.push_frame_trace(
+            "FRAME_ACCEPTED",
+            stage,
+            command,
+            Some(frame.direction),
+            None,
+            None,
+        );
+
         self.coordinator.accept(IoResponse::Transport {
             request_id,
             result: TransportResult::Exchange(Ok(Vec::new())),
@@ -482,6 +699,7 @@ impl WasmReadonlySerialDiscovery {
         self.accumulator = None;
         match self.identification.accept_response(&frame) {
             Ok(Some(identity)) => {
+                self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
                 self.outcome = Some(match check_scope(&identity) {
                     ScopeStatus::InScope => FinalOutcome::InScope(identity),
                     ScopeStatus::Mismatch { field } => {
@@ -493,14 +711,21 @@ impl WasmReadonlySerialDiscovery {
                 });
                 self.start_close().map(Some)
             }
-            Ok(None) => self.next_exchange().map(Some),
+            Ok(None) => {
+                self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
+                self.next_exchange().map(Some)
+            }
             Err(error) => {
+                let diagnostic = IdentityFailureDiagnostic::from_exec(stage, &error);
+                self.push_identity_trace(
+                    "IDENTITY_STAGE_FAILED",
+                    stage,
+                    command,
+                    Some(diagnostic.reason),
+                );
                 self.outcome = Some(FinalOutcome::Failed {
                     class: "ProtocolIdentityFailure",
-                    diagnostic: Some(IdentityFailureDiagnostic::from_exec(
-                        self.identification.stage(),
-                        &error,
-                    )),
+                    diagnostic: Some(diagnostic),
                 });
                 self.start_close().map(Some)
             }
@@ -608,6 +833,17 @@ impl WasmReadonlySerialDiscovery {
     pub fn accept_close_failure(&mut self, request_id: &str, failure: &str) -> Result<(), JsError> {
         self.accept_close(request_id, Some(failure))
             .map_err(js_error)
+    }
+
+    /// Remove the oldest privacy-bounded protocol event, if one is waiting.
+    ///
+    /// The queue is fixed at 32 entries and carries only stable enum-like labels and a
+    /// request byte count. The browser host drains it into its separate bounded RAM trace.
+    #[wasm_bindgen(js_name = takeTraceEvent)]
+    pub fn take_trace_event(&mut self) -> Option<WasmReadonlyTraceEvent> {
+        self.trace_events
+            .pop_front()
+            .map(|event| WasmReadonlyTraceEvent { event })
     }
 
     #[wasm_bindgen(getter, js_name = outcomeKind)]
@@ -767,6 +1003,16 @@ mod tests {
         }
         assert_eq!(bridge.identification.stage(), stage);
         (bridge, exchange)
+    }
+
+    fn stage_case(stage: IdentificationStage) -> (CommandId, Vec<u8>) {
+        match stage {
+            IdentificationStage::ApiVersion => (CommandId::ApiVersion, vec![0, 1, 46]),
+            IdentificationStage::FcVariant => (CommandId::FcVariant, b"BTFL".to_vec()),
+            IdentificationStage::FcVersion => (CommandId::FcVersion, vec![4, 5, 5]),
+            IdentificationStage::BoardInfo => (CommandId::BoardInfo, valid_board_payload()),
+            IdentificationStage::Complete => panic!("complete has no reply case"),
+        }
     }
 
     fn assert_failure(
@@ -1010,6 +1256,204 @@ mod tests {
             &[],
             ("ProtocolIdentityFailure", "API_VERSION", "ErrorReply"),
         );
+    }
+
+    #[test]
+    fn every_identity_stage_rejects_wrong_command_direction_and_error_reply() {
+        for stage in [
+            IdentificationStage::ApiVersion,
+            IdentificationStage::FcVariant,
+            IdentificationStage::FcVersion,
+            IdentificationStage::BoardInfo,
+        ] {
+            let (command, payload) = stage_case(stage);
+            let wrong_command = if command == CommandId::ApiVersion {
+                CommandId::FcVariant
+            } else {
+                CommandId::ApiVersion
+            };
+
+            let (bridge, exchange) = bridge_at(stage);
+            assert_failure(
+                bridge,
+                exchange,
+                Direction::Reply,
+                wrong_command,
+                &payload,
+                (
+                    "MalformedResponse",
+                    stage_label(stage).unwrap(),
+                    "WrongCommand",
+                ),
+            );
+
+            let (bridge, exchange) = bridge_at(stage);
+            assert_failure(
+                bridge,
+                exchange,
+                Direction::Request,
+                command,
+                &payload,
+                (
+                    "MalformedResponse",
+                    stage_label(stage).unwrap(),
+                    "WrongDirection",
+                ),
+            );
+
+            let (bridge, exchange) = bridge_at(stage);
+            assert_failure(
+                bridge,
+                exchange,
+                Direction::Error,
+                command,
+                &payload,
+                (
+                    "ProtocolIdentityFailure",
+                    stage_label(stage).unwrap(),
+                    "ErrorReply",
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn trace_events_are_rust_authoritative_fixed_vocabulary_only() {
+        let mut bridge = WasmReadonlySerialDiscovery::create().unwrap();
+        let open = bridge.begin_open().unwrap();
+        assert!(bridge.take_trace_event().is_none());
+
+        let exchange = bridge.accept_open_ok(&open.request_id).unwrap();
+        let directive = bridge.take_trace_event().unwrap().event;
+        assert_eq!(directive.layer, "RUST");
+        assert_eq!(directive.phase, "API_VERSION");
+        assert_eq!(directive.event, "DIRECTIVE");
+        assert_eq!(directive.stage, IdentificationStage::ApiVersion);
+        assert_eq!(directive.command, CommandId::ApiVersion);
+        assert_eq!(directive.byte_count, Some(6));
+        assert_eq!(directive.direction, Some(Direction::Request));
+        assert_eq!(directive.failure_class, None);
+        assert_eq!(directive.failure_reason, None);
+        assert_eq!(directive.origin, None);
+        assert!(bridge.take_trace_event().is_none());
+
+        let frame = encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap();
+        assert!(
+            bridge
+                .accept_chunk(&exchange.request_id, &frame[..2])
+                .unwrap()
+                .is_none()
+        );
+        assert!(bridge.take_trace_event().is_none());
+        assert!(
+            bridge
+                .accept_chunk(&exchange.request_id, &frame[2..])
+                .unwrap()
+                .is_some()
+        );
+
+        let frame_event = bridge.take_trace_event().unwrap().event;
+        assert_eq!(frame_event.layer, "MSP");
+        assert_eq!(frame_event.phase, "MSP_FRAME");
+        assert_eq!(frame_event.event, "FRAME_ACCEPTED");
+        assert_eq!(frame_event.command, CommandId::ApiVersion);
+        assert_eq!(frame_event.direction, Some(Direction::Reply));
+        assert_eq!(frame_event.failure_class, None);
+
+        let identity_event = bridge.take_trace_event().unwrap().event;
+        assert_eq!(identity_event.layer, "RUST");
+        assert_eq!(identity_event.phase, "IDENTITY_STAGE");
+        assert_eq!(identity_event.event, "IDENTITY_STAGE_OK");
+        assert_eq!(identity_event.stage, IdentificationStage::ApiVersion);
+        assert_eq!(identity_event.failure_reason, None);
+
+        let next_directive = bridge.take_trace_event().unwrap().event;
+        assert_eq!(next_directive.stage, IdentificationStage::FcVariant);
+        assert_eq!(next_directive.command, CommandId::FcVariant);
+        assert!(bridge.take_trace_event().is_none());
+    }
+
+    #[test]
+    fn malformed_frames_emit_only_a_structural_rejection_category() {
+        let (mut bridge, exchange) = bridge_at(IdentificationStage::ApiVersion);
+        while bridge.take_trace_event().is_some() {}
+
+        let mut frame = encode_frame(Direction::Reply, CommandId::ApiVersion, &[0, 1, 46]).unwrap();
+        *frame.last_mut().unwrap() ^= 0xff;
+        let close = bridge
+            .accept_chunk(&exchange.request_id, &frame)
+            .unwrap()
+            .unwrap();
+        assert_eq!(close.kind, "close");
+
+        let rejected = bridge.take_trace_event().unwrap().event;
+        assert_eq!(rejected.event, "FRAME_REJECTED");
+        assert_eq!(rejected.stage, IdentificationStage::ApiVersion);
+        assert_eq!(rejected.command, CommandId::ApiVersion);
+        assert_eq!(rejected.byte_count, None);
+        assert_eq!(rejected.direction, None);
+        assert_eq!(rejected.failure_class, Some("MalformedResponse"));
+        assert_eq!(
+            rejected.failure_reason,
+            Some(IdentityFailureReason::BadChecksum)
+        );
+        assert_eq!(rejected.origin, Some("MSP_FRAME"));
+        assert!(bridge.take_trace_event().is_none());
+    }
+
+    #[test]
+    fn randomized_chunk_segmentation_preserves_the_exact_four_stage_trace() {
+        for initial_seed in 1_u32..=64 {
+            let mut seed = initial_seed;
+            let mut bridge = WasmReadonlySerialDiscovery::create().unwrap();
+            let open = bridge.begin_open().unwrap();
+            let mut directive = bridge.accept_open_ok(&open.request_id).unwrap();
+            let replies = [
+                (CommandId::ApiVersion, vec![0, 1, 46]),
+                (CommandId::FcVariant, b"BTFL".to_vec()),
+                (CommandId::FcVersion, vec![4, 5, 5]),
+                (CommandId::BoardInfo, valid_board_payload()),
+            ];
+
+            for (command, payload) in replies {
+                let frame = encode_frame(Direction::Reply, command, &payload).unwrap();
+                let mut offset = 0;
+                let mut next = None;
+                while offset < frame.len() {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let length = usize::try_from(seed % 7 + 1).unwrap();
+                    let end = (offset + length).min(frame.len());
+                    let result = bridge
+                        .accept_chunk(&directive.request_id, &frame[offset..end])
+                        .unwrap();
+                    if result.is_some() {
+                        assert_eq!(end, frame.len());
+                        next = result;
+                    }
+                    offset = end;
+                }
+                directive = next.expect("the final segment must advance the Rust state machine");
+            }
+            assert_eq!(directive.kind, "close");
+
+            let events: Vec<_> = bridge.trace_events.drain(..).collect();
+            assert_eq!(events.len(), 12);
+            for (index, stage) in [
+                IdentificationStage::ApiVersion,
+                IdentificationStage::FcVariant,
+                IdentificationStage::FcVersion,
+                IdentificationStage::BoardInfo,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let triplet = &events[index * 3..index * 3 + 3];
+                assert_eq!(triplet[0].event, "DIRECTIVE");
+                assert_eq!(triplet[1].event, "FRAME_ACCEPTED");
+                assert_eq!(triplet[2].event, "IDENTITY_STAGE_OK");
+                assert!(triplet.iter().all(|event| event.stage == stage));
+            }
+        }
     }
 
     #[test]

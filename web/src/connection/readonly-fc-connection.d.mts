@@ -1,3 +1,8 @@
+import type {
+  DiagnosticOrigin,
+  DiagnosticTraceEvent,
+} from "../diagnostics/readonly-trace.mjs";
+
 export type ReadonlyFcFailure =
   | "Unavailable"
   | "Cancelled"
@@ -6,13 +11,15 @@ export type ReadonlyFcFailure =
   | "Disconnected"
   | "Timeout"
   | "MalformedResponse"
-  | "ProtocolFailure"
+  | "ProtocolIdentityFailure"
+  | "CloseFailure"
   | "HardwareEvidenceBoundary"
   | "Unknown";
 
 export interface PortSelectionResult {
   ok: boolean;
   failure?: ReadonlyFcFailure;
+  failureOrigin?: DiagnosticOrigin;
 }
 
 export type IdentityFailureStage =
@@ -47,6 +54,7 @@ export interface PrivacyBoundedIdentityResult {
   targetName?: string;
   scopeMismatchField?: string;
   failure?: ReadonlyFcFailure | string;
+  failureOrigin?: DiagnosticOrigin;
   failureStage?: IdentityFailureStage;
   failureReason?: IdentityFailureReason;
 }
@@ -54,6 +62,10 @@ export interface PrivacyBoundedIdentityResult {
 export interface ReadonlyFcConnection {
   selectPortFromUserGesture(): Promise<PortSelectionResult>;
   discover(): Promise<PrivacyBoundedIdentityResult>;
+  recordUiBoundaryFailure(): void;
+  diagnosticTrace(): readonly DiagnosticTraceEvent[];
+  safeDiagnosticTraceText(): string;
+  clearDiagnosticTrace(): void;
 }
 
 export declare function prepareReadonlyFcConnection(): Promise<ReadonlyFcConnection>;
