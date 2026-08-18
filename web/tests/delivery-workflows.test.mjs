@@ -55,6 +55,29 @@ function assertAppearsInOrder(source, needles) {
   }
 }
 
+function assertCanonicalSerialWasmDelivery(source, { browserGateCount }) {
+  assert.match(source, /rustup toolchain install 1\.85\.0 --profile minimal --target wasm32-unknown-unknown/);
+  assert.match(source, /rustup toolchain install 1\.97\.1 --profile minimal/);
+  assert.match(source, /cargo \+1\.85\.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge/);
+  assert.match(source, /--remap-path-prefix=\/home\/runner\/\.cargo\/registry\/src\/index\.crates\.io-1949cf8c6b5b557f\/wasm-bindgen-0\.2\.127\/src\/convert\/slices\.rs=\/source\/wasm-bindgen\/src\/convert\/slices\.rs/);
+  assert.match(source, /--remap-path-prefix=\/home\/runner\/\.cargo\/registry\/src\/index\.crates\.io-1949cf8c6b5b557f\/wasm-bindgen-0\.2\.127\/src\/externref\.rs=\/source\/wasm-bindgen\/src\/externref\.rs/);
+  assert.match(source, /--remap-path-prefix=crates\/protocol-msp\/src\/lib\.rs=\/source\/project\/crates\/protocol-msp\/src\/lib\.rs/);
+  assert.match(source, /cargo \+1\.97\.1 run --locked --manifest-path tools\/wasm-bindgen-cli-support\/Cargo\.toml/);
+  assert.match(source, /scripts\/verify_webserial_product_assets\.py/);
+  assert.match(source, /--input-wasm target\/wasm32-unknown-unknown\/release\/ade_web_readonly_serial_wasm_bridge\.wasm/);
+  assert.match(source, /--generated-dir target\/webserial-wasm-product-regenerated/);
+  assert.match(source, /scripts\/prepare_web_wasm\.py/);
+  assert.match(source, /--serial-root target\/webserial-wasm-product-regenerated/);
+  assert.equal(
+    (source.match(/webserial-readonly-browser-smoke\.mjs \.\.\/target\/webserial-wasm-product-regenerated/g) ?? []).length,
+    browserGateCount,
+  );
+  assert.doesNotMatch(source, /target\/webserial-wasm-web/);
+  assert.match(source, /git diff --exit-code --[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge\.js[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm/);
+  assert.match(source, /cmp --silent[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge\.js[\s\S]*web\/dist\/wasm\/ade_web_readonly_serial_wasm_bridge\.js/);
+  assert.match(source, /cmp --silent[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm[\s\S]*web\/dist\/wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm/);
+}
+
 test("delivery workflows use exactly the immutable selected-action allowlist", () => {
   const references = new Set([
     ...actionReferences(workflow("web-preview.yml")),
@@ -99,22 +122,7 @@ test("Web Preview remains manual, fail-closed, immutable, and minimally privileg
   assert.match(source, /actions\/deploy-pages@/);
   assert.match(source, /\/autonomous-drone-expert\//);
   assert.match(source, /production-delivery-browser-smoke\.mjs/);
-  assert.match(source, /rustup toolchain install 1\.97\.1 --profile minimal/);
-  assert.match(source, /cargo \+1\.85\.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge/);
-  assert.match(source, /--remap-path-prefix=\/home\/runner\/\.cargo\/registry\/src\/index\.crates\.io-1949cf8c6b5b557f\/wasm-bindgen-0\.2\.127\/src\/convert\/slices\.rs=\/source\/wasm-bindgen\/src\/convert\/slices\.rs/);
-  assert.match(source, /--remap-path-prefix=\/home\/runner\/\.cargo\/registry\/src\/index\.crates\.io-1949cf8c6b5b557f\/wasm-bindgen-0\.2\.127\/src\/externref\.rs=\/source\/wasm-bindgen\/src\/externref\.rs/);
-  assert.match(source, /--remap-path-prefix=crates\/protocol-msp\/src\/lib\.rs=\/source\/project\/crates\/protocol-msp\/src\/lib\.rs/);
-  assert.match(source, /cargo \+1\.97\.1 run --locked --manifest-path tools\/wasm-bindgen-cli-support\/Cargo\.toml/);
-  assert.match(source, /scripts\/verify_webserial_product_assets\.py/);
-  assert.match(source, /--input-wasm target\/wasm32-unknown-unknown\/release\/ade_web_readonly_serial_wasm_bridge\.wasm/);
-  assert.match(source, /--generated-dir target\/webserial-wasm-product-regenerated/);
-  assert.match(source, /scripts\/prepare_web_wasm\.py/);
-  assert.match(source, /--serial-root target\/webserial-wasm-product-regenerated/);
-  assert.equal((source.match(/webserial-readonly-browser-smoke\.mjs \.\.\/target\/webserial-wasm-product-regenerated/g) ?? []).length, 2);
-  assert.doesNotMatch(source, /target\/webserial-wasm-web/);
-  assert.match(source, /git diff --exit-code --[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge\.js[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm/);
-  assert.match(source, /cmp --silent[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge\.js[\s\S]*web\/dist\/wasm\/ade_web_readonly_serial_wasm_bridge\.js/);
-  assert.match(source, /cmp --silent[\s\S]*web\/public\/wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm[\s\S]*web\/dist\/wasm\/ade_web_readonly_serial_wasm_bridge_bg\.wasm/);
+  assertCanonicalSerialWasmDelivery(source, { browserGateCount: 2 });
   assertAppearsInOrder(source, [
     "cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml",
     "python3 scripts/verify_webserial_product_assets.py",
@@ -143,6 +151,18 @@ test("Android APK remains manual, read-only, hashed, and validation-only", () =>
   assert.match(source, /actions\/upload-artifact@/);
   assert.match(source, /DEVELOPMENT \/ VALIDATION — NOT PRODUCTION SIGNED/);
   assert.match(source, /Android USB flight-controller support: NOT VALIDATED/);
+  assertCanonicalSerialWasmDelivery(source, { browserGateCount: 1 });
+  assertAppearsInOrder(source, [
+    "cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml",
+    "python3 scripts/verify_webserial_product_assets.py",
+    "python3 scripts/prepare_web_wasm.py",
+    "git diff --exit-code --",
+    "Exercise repository-subpath PWA, IndexedDB, Web Serial, and WASM",
+    "Prove final Android Web dist contains canonical serial product assets",
+    "Prove packaged PWA contains no private material",
+    "Validate Android authority and dependency policy",
+    "Compile debug validation APK from strict lock and checksums",
+  ]);
   assert.doesNotMatch(source, /secrets\./);
   assert.doesNotMatch(source, /\bgit\s+(?:push|merge|rebase|reset|clean)\b/);
 });
