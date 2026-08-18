@@ -52,8 +52,8 @@
     },
     {
       "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
-      "sha256": "674e156f0f3afd8d6fbaae32a2d6d5d5bb1ff90387c9c553aad50a6bdd61bde2",
-      "size": 62959
+      "sha256": "16a51b4e59498664241d92365bca56c3e9b34aa535154feab479fcfc3a46f3e3",
+      "size": 62823
     }
   ],
   "verification": {

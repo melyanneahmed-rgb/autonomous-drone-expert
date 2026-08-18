@@ -37,8 +37,8 @@ JavaScript and React do not inspect protocol bytes or select compatibility.
 
 The generated serial bridge JavaScript remains byte-identical at
 `c383a32030cb6e361bed425be8a7ee1b1872fc8d270b9fdb90b15ab1d6d59f75`; the regenerated WASM is
-62,959 bytes with SHA-256
-`674e156f0f3afd8d6fbaae32a2d6d5d5bb1ff90387c9c553aad50a6bdd61bde2`. Storage WASM,
+62,823 bytes with trusted-Linux SHA-256
+`16a51b4e59498664241d92365bca56c3e9b34aa535154feab479fcfc3a46f3e3`. Storage WASM,
 `Cargo.lock`, and `web/package-lock.json` are unchanged. No dependency, write authority, fifth
 command, API-1.47 parser, UI redesign, setting change, child deployment, or physical operation is
 part of this pass.

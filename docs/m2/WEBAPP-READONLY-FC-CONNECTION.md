@@ -81,7 +81,7 @@ git status --short
 $js = (Get-FileHash web/public/wasm/ade_web_readonly_serial_wasm_bridge.js -Algorithm SHA256).Hash
 $wasm = (Get-FileHash web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm -Algorithm SHA256).Hash
 if ($js -ne "C383A32030CB6E361BED425BE8A7EE1B1872FC8D270B9FDB90B15AB1D6D59F75") { throw "JS glue hash mismatch" }
-if ($wasm -ne "674E156F0F3AFD8D6FBAAE32A2D6D5D5BB1FF90387C9C553AAD50A6BDD61BDE2") { throw "WASM hash mismatch" }
+if ($wasm -ne "16A51B4E59498664241D92365BCA56C3E9B34AA535154FEAB479FCFC3A46F3E3") { throw "WASM hash mismatch" }
 
 Set-Location web
 npx --yes npm@11.13.0 ci --ignore-scripts --no-fund

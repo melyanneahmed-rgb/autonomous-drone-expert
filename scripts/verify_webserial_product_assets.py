@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import re
@@ -198,14 +197,6 @@ def main() -> int:
         print("WEB SERIAL PRODUCT ASSET GATE FAILED\n")
         for error in errors:
             print(f"  - {error}")
-        if args.generated_dir is not None:
-            canonical = args.generated_dir / "ade_web_readonly_serial_wasm_bridge_bg.wasm"
-            if canonical.is_file():
-                encoded = base64.b64encode(canonical.read_bytes()).decode("ascii")
-                print(f"CANONICAL_WASM_SIZE={canonical.stat().st_size}")
-                print(f"CANONICAL_WASM_SHA256={sha256(canonical)}")
-                for offset in range(0, len(encoded), 4000):
-                    print(f"CANONICAL_WASM_BASE64_{offset // 4000:04d}={encoded[offset:offset + 4000]}")
         return 1
     suffix = " + byte-for-byte regeneration" if args.generated_dir else ""
     input_evidence = (
