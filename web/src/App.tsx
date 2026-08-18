@@ -18,6 +18,7 @@ type ConnectionPhase =
   | "reading-identity"
   | "read-complete"
   | "scope-mismatch"
+  | "api-unsupported"
   | "cancelled"
   | "unavailable"
   | "failed";
@@ -150,6 +151,7 @@ const connectionCopy: Record<ConnectionPhase, string> = {
   "reading-identity": "جارٍ قراءة الهوية الآمنة…",
   "read-complete": "اكتملت قراءة الهوية ضمن النطاق المقترح",
   "scope-mismatch": "اكتملت القراءة — الهوية خارج النطاق المقترح",
+  "api-unsupported": "إصدار واجهة وحدة التحكم غير مدعوم حاليًا",
   cancelled: "أُلغي اختيار المنفذ دون قراءة الجهاز",
   unavailable: "واجهة الاتصال التسلسلي غير متاحة في هذا المتصفح",
   failed: "توقفت القراءة بأمان",
@@ -329,6 +331,8 @@ export default function App() {
         setConnection({ phase: "read-complete", result });
       } else if (result.outcome === "scope-mismatch") {
         setConnection({ phase: "scope-mismatch", result });
+      } else if (result.outcome === "api-unsupported") {
+        setConnection({ phase: "api-unsupported", result });
       } else {
         setConnection({ phase: "failed", result });
       }
@@ -897,7 +901,7 @@ export default function App() {
               >
                 {connectionButtonCopy}
               </button>
-              {connection.result && (
+              {connection.result && connection.phase !== "api-unsupported" && (
                 <dl className="connection-identity" aria-label="هوية وحدة التحكم المقروءة">
                   {connection.result.apiVersion && (
                     <div data-identity-field="apiVersion">

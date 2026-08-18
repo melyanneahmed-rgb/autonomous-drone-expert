@@ -43,7 +43,12 @@ export type IdentityFailureReason =
   | "OtherProtocolIdentityFailure";
 
 export interface ReadonlyDiscoveryResult {
-  outcome: "in-scope" | "scope-mismatch" | "failed" | "pending";
+  outcome:
+    | "in-scope"
+    | "scope-mismatch"
+    | "api-unsupported"
+    | "failed"
+    | "pending";
   failure?: string;
   failureOrigin?: DiagnosticOrigin;
   failureStage?: IdentityFailureStage;

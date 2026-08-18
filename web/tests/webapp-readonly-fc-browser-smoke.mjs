@@ -104,11 +104,21 @@ function installFakeSerial(scenario) {
     36, 77, 62, boardPayloadWithTrailingByte.length, 4,
     ...boardPayloadWithTrailingByte, boardChecksum,
   ]);
-  const replies = scenario === "scope-mismatch"
-    ? [Uint8Array.from([36, 77, 62, 3, 1, 0, 1, 45, 46]), ...inScopeReplies.slice(1)]
-    : scenario === "protocol-identity-failure"
-      ? [...inScopeReplies.slice(0, 3), boardTrailingPayloadReply]
-      : inScopeReplies;
+  const replies = scenario === "api-unsupported-147" || scenario === "fragmented-api-version"
+    ? [Uint8Array.from([36, 77, 62, 3, 1, 0, 1, 47, 44])]
+    : scenario === "api-unsupported-major"
+      ? [Uint8Array.from([36, 77, 62, 3, 1, 0, 2, 46, 46])]
+      : scenario === "malformed-api-version"
+        ? [Uint8Array.from([36, 77, 62, 2, 1, 0, 1, 2])]
+        : scenario === "scope-mismatch"
+          ? [
+              ...inScopeReplies.slice(0, 2),
+              Uint8Array.from([36, 77, 62, 3, 3, 4, 5, 6, 7]),
+              inScopeReplies[3],
+            ]
+          : scenario === "protocol-identity-failure"
+            ? [...inScopeReplies.slice(0, 3), boardTrailingPayloadReply]
+            : inScopeReplies;
 
   class FakePort {
     constructor() {
@@ -137,8 +147,13 @@ function installFakeSerial(scenario) {
         getWriter: () => ({
           write: async (bytes) => {
             this.writes.push(Array.from(bytes));
-            const reply = replies[this.writes.length - 1];
-            if (reply) this.queue.push(reply);
+            const attemptWrite = (this.writes.length - 1) % replies.length;
+            const reply = replies[attemptWrite];
+            if (reply && scenario === "fragmented-api-version") {
+              this.queue.push(reply.slice(0, 3), reply.slice(3, 6), reply.slice(6));
+            } else if (reply) {
+              this.queue.push(reply);
+            }
           },
           releaseLock: () => { this.writerReleased += 1; },
         }),
@@ -246,7 +261,14 @@ async function waitFor(evaluate, expression, expected, label) {
 }
 
 async function waitForTerminalPhase(evaluate, label) {
-  const terminal = new Set(["read-complete", "scope-mismatch", "cancelled", "unavailable", "failed"]);
+  const terminal = new Set([
+    "read-complete",
+    "scope-mismatch",
+    "api-unsupported",
+    "cancelled",
+    "unavailable",
+    "failed",
+  ]);
   let last;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     last = await evaluate(
@@ -292,7 +314,7 @@ async function activateConnectionFromTrustedKeyboardGesture(send, evaluate) {
   );
 }
 
-async function runScenario(browser, url, scenario, expectedPhase) {
+async function runScenario(browser, url, scenario, expectedPhase, attempts = 1) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `ade-webapp-readonly-${scenario}-`));
   const child = spawn(browser, [
     "--headless=new", "--disable-background-networking", "--disable-breakpad",
@@ -356,6 +378,18 @@ async function runScenario(browser, url, scenario, expectedPhase) {
         `${scenario} terminal phase: expected ${expectedPhase}; ` +
           `bounded diagnostic ${JSON.stringify(boundedDiagnostic)}`,
       );
+    }
+    for (let attempt = 2; attempt <= attempts; attempt += 1) {
+      await activateConnectionFromTrustedKeyboardGesture(control.send, control.evaluate);
+      const repeatedPhase = await waitForTerminalPhase(
+        control.evaluate,
+        `${scenario} repeat ${attempt}`,
+      );
+      if (repeatedPhase !== expectedPhase) {
+        throw new Error(
+          `${scenario} repeat ${attempt}: expected ${expectedPhase}, got ${repeatedPhase}`,
+        );
+      }
     }
     const diagnosticBefore = await control.evaluate(`(() => {
       const panel = document.querySelector('[data-diagnostic-trace="temporary"]');
@@ -458,8 +492,57 @@ try {
   const mismatch = await runScenario(browser, url, "scope-mismatch", "scope-mismatch");
   if (
     JSON.stringify(mismatch.writes) !== JSON.stringify(expectedRequests) ||
-    mismatch.fields.scopeMismatchField !== "msp_api_version" || mismatch.closeCount !== 1
+    mismatch.fields.scopeMismatchField !== "fc_version" || mismatch.closeCount !== 1
   ) throw new Error(`PRODUCTION_SCOPE_MISMATCH_PROOF_FAILED:${JSON.stringify(mismatch)}`);
+
+  const api147 = await runScenario(
+    browser,
+    url,
+    "api-unsupported-147",
+    "api-unsupported",
+    2,
+  );
+  if (
+    JSON.stringify(api147.writes) !== JSON.stringify([expectedRequests[0], expectedRequests[0]]) ||
+    Object.keys(api147.fields).length !== 0 ||
+    api147.openCount !== 2 || api147.closeCount !== 2 ||
+    api147.text.includes("1.47") || api147.text.includes("msp_api_version")
+  ) throw new Error(`PRODUCTION_API_147_GATE_FAILED:${JSON.stringify(api147)}`);
+
+  const major = await runScenario(
+    browser,
+    url,
+    "api-unsupported-major",
+    "api-unsupported",
+  );
+  if (
+    JSON.stringify(major.writes) !== JSON.stringify([expectedRequests[0]]) ||
+    Object.keys(major.fields).length !== 0 || major.closeCount !== 1
+  ) throw new Error(`PRODUCTION_API_MAJOR_GATE_FAILED:${JSON.stringify(major)}`);
+
+  const fragmented = await runScenario(
+    browser,
+    url,
+    "fragmented-api-version",
+    "api-unsupported",
+  );
+  if (
+    JSON.stringify(fragmented.writes) !== JSON.stringify([expectedRequests[0]]) ||
+    Object.keys(fragmented.fields).length !== 0 || fragmented.closeCount !== 1
+  ) throw new Error(`PRODUCTION_FRAGMENTED_API_GATE_FAILED:${JSON.stringify(fragmented)}`);
+
+  const malformedApi = await runScenario(
+    browser,
+    url,
+    "malformed-api-version",
+    "failed",
+  );
+  if (
+    JSON.stringify(malformedApi.writes) !== JSON.stringify([expectedRequests[0]]) ||
+    malformedApi.fields.failure !== "ProtocolIdentityFailure" ||
+    malformedApi.fields.failureStage !== "API_VERSION" ||
+    malformedApi.fields.failureReason !== "WrongLength" || malformedApi.closeCount !== 1
+  ) throw new Error(`PRODUCTION_MALFORMED_API_PROOF_FAILED:${JSON.stringify(malformedApi)}`);
 
   const typedFailure = await runScenario(
     browser,
@@ -489,7 +572,17 @@ try {
     throw new Error(`PRODUCTION_UNAVAILABLE_PROOF_FAILED:${JSON.stringify(unavailable)}`);
   }
 
-  for (const run of [success, mismatch, typedFailure, cancelled, unavailable]) {
+  for (const run of [
+    success,
+    mismatch,
+    api147,
+    major,
+    fragmented,
+    malformedApi,
+    typedFailure,
+    cancelled,
+    unavailable,
+  ]) {
     if (/hardwareObserved|serial.?number|usbVendorId|usbProductId|COM\d/i.test(run.text)) {
       throw new Error("PRODUCTION_UI_PRIVACY_BOUNDARY_FAILED");
     }

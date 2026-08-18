@@ -12,11 +12,13 @@ use std::collections::VecDeque;
 
 use ade_core_api::{ScopeStatus, check_scope};
 use ade_execution::{
-    ExecError, IdentificationRequest, IdentificationStage, ReadonlyIdentification,
+    ExecError, IdentificationProgress, IdentificationRequest, IdentificationStage,
+    ReadonlyIdentification,
 };
 use ade_facts::DeviceIdentity;
 use ade_protocol_msp::{
-    CommandId, Direction, MspError, MspV1ResponseAccumulator, ResponseProgress, decode_frame,
+    ApiVersion, CommandId, Direction, MspError, MspV1ResponseAccumulator, ResponseProgress,
+    decode_frame,
 };
 use ade_runtime_ports::{
     BoundaryError, IoCoordinator, IoEffect, IoResponse, OutboundPacket, RequestId, TransportEffect,
@@ -128,6 +130,10 @@ enum FinalOutcome {
     InScope(DeviceIdentity),
     ScopeMismatch {
         identity: DeviceIdentity,
+        field: &'static str,
+    },
+    ApiScopeMismatch {
+        api: ApiVersion,
         field: &'static str,
     },
     Failed {
@@ -698,7 +704,7 @@ impl WasmReadonlySerialDiscovery {
         self.pending_id = None;
         self.accumulator = None;
         match self.identification.accept_response(&frame) {
-            Ok(Some(identity)) => {
+            Ok(IdentificationProgress::Complete(identity)) => {
                 self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
                 self.outcome = Some(match check_scope(&identity) {
                     ScopeStatus::InScope => FinalOutcome::InScope(identity),
@@ -711,9 +717,14 @@ impl WasmReadonlySerialDiscovery {
                 });
                 self.start_close().map(Some)
             }
-            Ok(None) => {
+            Ok(IdentificationProgress::Pending) => {
                 self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
                 self.next_exchange().map(Some)
+            }
+            Ok(IdentificationProgress::ApiScopeMismatch { api, field }) => {
+                self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
+                self.outcome = Some(FinalOutcome::ApiScopeMismatch { api, field });
+                self.start_close().map(Some)
             }
             Err(error) => {
                 let diagnostic = IdentityFailureDiagnostic::from_exec(stage, &error);
@@ -775,7 +786,7 @@ impl WasmReadonlySerialDiscovery {
             FinalOutcome::InScope(identity) | FinalOutcome::ScopeMismatch { identity, .. } => {
                 Some(identity)
             }
-            FinalOutcome::Failed { .. } => None,
+            FinalOutcome::ApiScopeMismatch { .. } | FinalOutcome::Failed { .. } => None,
         }
     }
 }
@@ -853,6 +864,9 @@ impl WasmReadonlySerialDiscovery {
             Some(FinalOutcome::ScopeMismatch { .. }) if self.phase == Phase::Complete => {
                 "scope-mismatch"
             }
+            Some(FinalOutcome::ApiScopeMismatch { .. }) if self.phase == Phase::Complete => {
+                "api-unsupported"
+            }
             Some(FinalOutcome::Failed { .. }) if self.phase == Phase::Complete => "failed",
             _ => "pending",
         }
@@ -898,15 +912,24 @@ impl WasmReadonlySerialDiscovery {
     #[wasm_bindgen(getter, js_name = scopeMismatchField)]
     pub fn scope_mismatch_field(&self) -> Option<String> {
         match &self.outcome {
-            Some(FinalOutcome::ScopeMismatch { field, .. }) => Some((*field).to_owned()),
+            Some(
+                FinalOutcome::ScopeMismatch { field, .. }
+                | FinalOutcome::ApiScopeMismatch { field, .. },
+            ) => Some((*field).to_owned()),
             _ => None,
         }
     }
 
     #[wasm_bindgen(getter, js_name = apiVersion)]
     pub fn api_version(&self) -> Option<String> {
-        self.identity()
-            .map(|identity| format!("{}.{}", identity.api.api_major, identity.api.api_minor))
+        match &self.outcome {
+            Some(FinalOutcome::ApiScopeMismatch { api, .. }) => {
+                Some(format!("{}.{}", api.api_major, api.api_minor))
+            }
+            _ => self
+                .identity()
+                .map(|identity| format!("{}.{}", identity.api.api_major, identity.api.api_minor)),
+        }
     }
 
     #[wasm_bindgen(getter, js_name = fcVariant)]
@@ -1056,6 +1079,59 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_api_versions_close_after_only_the_api_read() {
+        for (payload, expected_api, expected_field) in [
+            ([0, 1, 45], "1.45", "msp_api_version"),
+            ([0, 1, 47], "1.47", "msp_api_version"),
+            ([0, 2, 46], "2.46", "msp_api_version"),
+            ([1, 1, 46], "1.46", "protocol_version"),
+        ] {
+            let mut bridge = WasmReadonlySerialDiscovery::create().unwrap();
+            let open = bridge.begin_open().unwrap();
+            let exchange = bridge.accept_open_ok(&open.request_id).unwrap();
+            let request = decode_frame(&exchange.bytes).unwrap();
+            assert_eq!(request.known_command(), Some(CommandId::ApiVersion));
+            assert_eq!(request.payload_len(), 0);
+
+            let close = feed_reply(
+                &mut bridge,
+                &exchange,
+                Direction::Reply,
+                CommandId::ApiVersion,
+                &payload,
+            );
+            assert_eq!(close.kind, "close");
+            assert!(close.bytes.is_empty());
+            assert!(bridge.identification.is_complete());
+            assert!(bridge.identity().is_none());
+            assert!(bridge.failure_class().is_none());
+            assert!(bridge.failure_stage().is_none());
+            assert!(bridge.failure_reason().is_none());
+            assert_eq!(bridge.api_version().as_deref(), Some(expected_api));
+            assert_eq!(
+                bridge.scope_mismatch_field().as_deref(),
+                Some(expected_field),
+            );
+
+            bridge.accept_close(&close.request_id, None).unwrap();
+            assert_eq!(bridge.outcome_kind(), "api-unsupported");
+            assert!(!bridge.hardware_observed());
+            let events: Vec<_> = bridge.trace_events.drain(..).collect();
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event == "DIRECTIVE")
+                    .count(),
+                1,
+            );
+            assert!(events.iter().all(|event| {
+                event.stage == IdentificationStage::ApiVersion
+                    && event.command == CommandId::ApiVersion
+            }));
+        }
+    }
+
+    #[test]
     fn refused_identification_contexts_cannot_create_a_web_serial_directive() {
         let all_states = [
             SessionState::Disconnected,
@@ -1194,6 +1270,18 @@ mod tests {
             Direction::Reply,
             CommandId::FcVersion,
             &[4, 5],
+            ("ProtocolIdentityFailure", "FC_VERSION", "WrongLength"),
+        );
+
+        let (bridge, exchange) = bridge_at(IdentificationStage::FcVersion);
+        assert_failure(
+            bridge,
+            exchange,
+            Direction::Reply,
+            CommandId::FcVersion,
+            &[
+                25, 12, 5, 9, b'2', b'0', b'2', b'5', b'.', b'1', b'2', b'.', b'5',
+            ],
             ("ProtocolIdentityFailure", "FC_VERSION", "WrongLength"),
         );
     }

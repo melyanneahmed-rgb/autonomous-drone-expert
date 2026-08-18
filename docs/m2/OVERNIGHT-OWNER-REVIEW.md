@@ -1,5 +1,65 @@
 # Overnight owner review dossier
 
+## Current morning handoff — API-scope safety child
+
+This overnight pass starts exactly from the accepted PR #18 commit
+`c2ad3c0aa95c379a2b5a17e423979530eed0d05e` / tree
+`97b21a6f36657c201240cb1caf91fb375431da2a`. PR #18 itself remains frozen,
+Draft/open/unmerged. `main` remains `cea776b5c00444289eca95a255c0ec79d22eaaeb` / tree
+`a89a3cbdf4339960c872b731f7e884b14974cdbe`, and PR #17 remains
+`716bc2f7fe39a77e44cda43ba6978ebd0d0ec1e0` / tree
+`f9d0b2aa335f3456954da76977d590606443f7bb`.
+
+The only accepted new physical evidence is one prior owner-controlled read attempt with:
+
+- `PHYSICAL_FC_TEST_ATTEMPTED=YES`
+- `PHYSICAL_USB_SELECTION_OBSERVED=YES`
+- `READONLY_IDENTITY_COMPLETION=NO`
+- `HARDWARE_SUPPORT_VALIDATED=NO`
+- `ProtocolIdentityFailure / IDENTITY_STAGE / FC_VERSION / WrongLength`
+
+It is consistent with a newer or different MSP API format, but does not prove firmware, API,
+board, target, USB identity, or hardware support. Official clean-room research pinned the API
+minor bump to Betaflight commit `dc40b8f65526a526383ebdb5aaba755712c3fcae` and the extended
+`MSP_FC_VERSION` layout to `21eba179396e240ccc548fb63c18e23ddf628cf3`; the first identified
+final tag carrying it is `2025.12.1` at
+`85d201376a1fc33b223c27448808c2cc7b8f2743`. The complete evidence analysis is in
+`docs/m2/PHYSICAL-FC-VERSION-MISMATCH-INVESTIGATION.md`.
+
+The accepted code deferred scope enforcement until all four identity replies. The focused child
+keeps product scope exactly protocol 0 / API 1.46 but moves that exact predicate into shared Rust
+facts and applies it immediately after a structurally valid API reply. Supported input follows the
+unchanged four empty-payload reads. Any unsupported valid tuple yields a typed
+`api-unsupported` result, sends no second command, fabricates no identity, keeps
+`hardwareObserved=false`, and closes through the existing Rust-owned cleanup. Malformed input
+remains `ProtocolIdentityFailure`; the strict three-byte `FC_VERSION` parser remains unchanged.
+JavaScript and React do not inspect protocol bytes or select compatibility.
+
+The generated serial bridge JavaScript remains byte-identical at
+`c383a32030cb6e361bed425be8a7ee1b1872fc8d270b9fdb90b15ab1d6d59f75`; the regenerated WASM is
+62,959 bytes with SHA-256
+`674e156f0f3afd8d6fbaae32a2d6d5d5bb1ff90387c9c553aad50a6bdd61bde2`. Storage WASM,
+`Cargo.lock`, and `web/package-lock.json` are unchanged. No dependency, write authority, fifth
+command, API-1.47 parser, UI redesign, setting change, child deployment, or physical operation is
+part of this pass.
+
+Android exact-source validation is an independent lane for accepted SHA `c2ad3c0…`. It could not
+be dispatched from this environment: the GitHub connector exposes workflow inspection and reruns
+but no workflow-dispatch operation, while the signed-in browser bridge rejected its own
+`browser-service.mjs` dependency as outside a configured trusted code path. The workflow did not
+start, so there is no run or artifact to inspect and no Android result is inferred from local
+builds. No setting, workflow, or repository file was changed to work around that environment
+blocker.
+
+Local child validation passed 205 Rust tests, 46 Web source tests, 105 Python policy tests (one
+environment-only symlink skip), workspace formatting/check/clippy, Rust 1.85 workspace MSRV,
+WASM-target checks, generated serial-WASM byte comparison, Android authority/dependency policy,
+and real-browser storage/Web Serial/PWA/product scenarios at both `/` and
+`/autonomous-drone-expert/`. Local cargo-deny bans/licenses/sources passed; advisories require the
+canonical networked runner. The safe morning sequence is: review the child Draft PR and its exact-
+head eight-job CI; separately decide whether to integrate it into PR #18; only after a reviewed
+rebuild/deployment decide whether to perform exactly one new USB-only read attempt.
+
 ## Executive outcome
 
 This dossier now records the correction-only pass after repository state changed. PR #21 was
@@ -58,7 +118,8 @@ of PR #18. This correction retains that merge and adds no connection or write au
 The trace architecture is deliberately narrow:
 
 - Rust remains authoritative for stage, command, direction, frame decision, and parser reason.
-- `discover()` remains zero-argument and issues exactly four Rust-owned empty-payload reads.
+- `discover()` remains zero-argument. The supported path issues exactly four Rust-owned
+  empty-payload reads; the new valid-unsupported-API path stops after the first.
 - Rust holds at most 32 protocol events; the browser holds at most 200 complete fixed-schema
   events and deterministically evicts oldest first.
 - Each selection attempt resets the trace. Consumer snapshots and events are frozen.

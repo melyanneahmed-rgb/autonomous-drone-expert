@@ -1,0 +1,39 @@
+{
+  "record_id": "bf-2025.12.1-msp-fc-version",
+  "kind": "payload_layout",
+  "name": "MSP_FC_VERSION",
+  "value": 3,
+  "firmware": {
+    "family": "Betaflight",
+    "version": "2025.12.1",
+    "msp_api_version": "1.47"
+  },
+  "source": {
+    "type": "upstream_firmware_source_read",
+    "repository": "betaflight/betaflight",
+    "ref_kind": "tag",
+    "ref": "2025.12.1",
+    "path": "src/main/msp/msp.c",
+    "url": "https://raw.githubusercontent.com/betaflight/betaflight/2025.12.1/src/main/msp/msp.c",
+    "retrieved_at": "2026-08-18",
+    "retrieved_by": "overnight-m2-readonly-investigation",
+    "resolved_commit": "85d201376a1fc33b223c27448808c2cc7b8f2743"
+  },
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": 13,
+    "note": "Read-only reply: three u8 calendar-version values followed by a one-byte string length and the version-string bytes. The final version string 2025.12.1 is nine bytes, making this tagged reply 13 bytes total. Official commit 21eba179396e240ccc548fb63c18e23ddf628cf3 introduced the extra length-prefixed version string."
+  },
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "NOT_REPRODUCED",
+  "verification": {
+    "method": "Clean-room review of the pinned official source only. The project does not parse or support this extended layout and this record does not claim hardware observation.",
+    "mock_exercised_at": null,
+    "hardware_observed_at": null
+  },
+  "licensing": {
+    "copied_material": false,
+    "note": "Interface layout facts were read from a published pinned source and restated in original prose. No upstream code, comments, fixtures, tables, tests, or error strings were copied."
+  },
+  "notes": "Compatibility research only. The strict API-1.46 three-byte parser remains unchanged."
+}

@@ -11,9 +11,16 @@ const IN_SCOPE_REPLIES = [
   [36, 77, 62, 3, 3, 4, 5, 5, 4],
   [36, 77, 62, 88, 4, 83, 52, 48, 53, 0, 0, 0, 0, 15, 83, 80, 69, 69, 68, 89, 66, 69, 69, 70, 52, 48, 53, 86, 52, 17, 83, 112, 101, 101, 100, 121, 66, 101, 101, 32, 70, 52, 48, 53, 32, 86, 52, 3, 83, 80, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66],
 ].map((bytes) => Uint8Array.from(bytes));
-const OUT_OF_SCOPE_REPLIES = [
-  Uint8Array.from([36, 77, 62, 3, 1, 0, 1, 45, 46]),
-  ...IN_SCOPE_REPLIES.slice(1),
+const API_SCOPE_REPLIES = [
+  ["lower-minor", [36, 77, 62, 3, 1, 0, 1, 45, 46], "1.45", "normal"],
+  ["higher-minor", [36, 77, 62, 3, 1, 0, 1, 47, 44], "1.47", "split-frame"],
+  ["incompatible-major", [36, 77, 62, 3, 1, 0, 2, 46, 46], "2.46", "whole-frame"],
+  ["incompatible-protocol", [36, 77, 62, 3, 1, 1, 1, 46, 44], "1.46", "normal"],
+];
+const FULL_SCOPE_MISMATCH_REPLIES = [
+  ...IN_SCOPE_REPLIES.slice(0, 2),
+  Uint8Array.from([36, 77, 62, 3, 3, 4, 5, 6, 7]),
+  IN_SCOPE_REPLIES[3],
 ];
 const EXPECTED_REQUESTS = [1, 2, 3, 4].map((command) =>
   Uint8Array.from([36, 77, 60, 0, command, command]),
@@ -464,12 +471,45 @@ async function scenarioFFailClosed() {
 
 async function scenarioHScopeMismatch() {
   mark("H-scope-mismatch");
-  const run = await runDiscovery(OUT_OF_SCOPE_REPLIES);
-  assert(run.result.outcome === "scope-mismatch", "scope mismatch result");
-  assert(run.result.scopeMismatchField === "msp_api_version", "typed mismatch field");
-  assert(run.result.hardwareObserved === false, "scope is not hardware evidence");
-  assert(run.port.writes.length === 4 && run.port.closeCount === 1, "read-only stop and close");
-  assertPrivacyBoundedTrace(run.host, ["SPEEDYBEEF405V4", "BTFL"]);
+  for (const [label, apiReply, apiVersion, mode] of API_SCOPE_REPLIES) {
+    const run = await runDiscovery([Uint8Array.from(apiReply)], mode);
+    assert(run.result.outcome === "api-unsupported", `${label} typed compatibility outcome`);
+    assert(
+      run.result.scopeMismatchField ===
+        (label === "incompatible-protocol" ? "protocol_version" : "msp_api_version"),
+      `${label} typed mismatch field`,
+    );
+    assert(run.result.apiVersion === apiVersion, `${label} retains only the parsed API fact`);
+    assert(run.result.fcVariant === undefined, `${label} has no FC variant`);
+    assert(run.result.fcVersion === undefined, `${label} has no FC version`);
+    assert(run.result.targetName === undefined, `${label} has no board identity`);
+    assert(run.result.failure !== "ProtocolIdentityFailure", `${label} is not malformed`);
+    assert(run.result.hardwareObserved === false, `${label} is not hardware evidence`);
+    assert(run.port.writes.length === 1, `${label} sends only MSP_API_VERSION`);
+    assert(equalBytes(run.port.writes[0], EXPECTED_REQUESTS[0]), `${label} exact first request`);
+    assert(run.port.closeCount === 1, `${label} closes exactly once`);
+    const trace = assertPrivacyBoundedTrace(run.host, ["SPEEDYBEEF405V4", "BTFL"]);
+    assert(
+      trace.filter((event) => event.event === "DIRECTIVE").length === 1,
+      `${label} has no second Rust directive`,
+    );
+  }
+
+  const full = await runDiscovery(FULL_SCOPE_MISMATCH_REPLIES);
+  assert(full.result.outcome === "scope-mismatch", "complete identity scope mismatch result");
+  assert(full.result.scopeMismatchField === "fc_version", "complete typed mismatch field");
+  assert(full.result.hardwareObserved === false, "complete scope is not hardware evidence");
+  assert(full.port.writes.length === 4 && full.port.closeCount === 1, "four-read stop and close");
+
+  const port = new TestPort([Uint8Array.from(API_SCOPE_REPLIES[1][1])], "split-frame");
+  const host = hostFor(new TestSerial(port), 15);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    assert((await host.selectPortFromUserGesture()).ok, `unsupported retry selection ${attempt}`);
+    const result = await host.discover();
+    assert(result.outcome === "api-unsupported", `unsupported retry outcome ${attempt}`);
+  }
+  assert(port.openCount === 2 && port.closeCount === 2, "unsupported retries close cleanly");
+  assert(port.writes.length === 2, "unsupported retries send only one API read each");
 }
 
 async function scenarioIHostFailureOriginsAndRetry() {

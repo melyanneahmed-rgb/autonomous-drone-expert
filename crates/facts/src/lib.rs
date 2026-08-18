@@ -29,6 +29,39 @@ pub enum VerificationState {
     HardwareObserved,
 }
 
+/// Whether an observed MSP API header is inside the proposed M1 product scope.
+///
+/// This is intentionally narrower than protocol compatibility in general: the product has
+/// proved only MSP protocol 0 with API 1.46. A structurally valid different version is a
+/// typed scope mismatch, not a malformed response and not permission to continue identity
+/// reads under an unknown layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiScopeStatus {
+    /// The exact proposed MSP protocol/API tuple.
+    InScope,
+    /// A valid API reply outside the proposed product scope.
+    Mismatch {
+        /// Stable field label shared with the full identity scope check.
+        field: &'static str,
+    },
+}
+
+/// Check the part of the proposed M1 scope that is known after `MSP_API_VERSION` alone.
+#[must_use]
+pub const fn check_m1_api_scope(api: &ApiVersion) -> ApiScopeStatus {
+    if api.protocol_version != 0 {
+        return ApiScopeStatus::Mismatch {
+            field: "protocol_version",
+        };
+    }
+    if api.api_major != 1 || api.api_minor != 46 {
+        return ApiScopeStatus::Mismatch {
+            field: "msp_api_version",
+        };
+    }
+    ApiScopeStatus::InScope
+}
+
 /// The stable reconnection identity of a device, assembled from the four identification
 /// replies.
 ///
@@ -149,6 +182,28 @@ mod tests {
             protocol_version: 0,
             api_major: 1,
             api_minor: 46,
+        }
+    }
+
+    #[test]
+    fn api_scope_is_exact_and_distinguishes_protocol_from_api() {
+        assert_eq!(check_m1_api_scope(&api()), ApiScopeStatus::InScope);
+
+        for (protocol_version, api_major, api_minor, field) in [
+            (1, 1, 46, "protocol_version"),
+            (0, 0, 46, "msp_api_version"),
+            (0, 2, 46, "msp_api_version"),
+            (0, 1, 45, "msp_api_version"),
+            (0, 1, 47, "msp_api_version"),
+        ] {
+            assert_eq!(
+                check_m1_api_scope(&ApiVersion {
+                    protocol_version,
+                    api_major,
+                    api_minor,
+                }),
+                ApiScopeStatus::Mismatch { field },
+            );
         }
     }
 

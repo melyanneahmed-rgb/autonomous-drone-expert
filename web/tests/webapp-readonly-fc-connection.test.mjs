@@ -33,7 +33,7 @@ test("the bounded production host and declaration are byte-locked", () => {
   assert.equal(sha256(host), "cd8149b04cb2d2606243ccb86fe803229f13f99ce4e4e41d795d084617f953ff");
   assert.equal(
     sha256(hostTypes),
-    "fed3d8e35d89a95b4efd20a53044d83748421fe5c23927d21b83d576c3d3ac0a",
+    "5dae945ba11d9401872bf28aa5f4d10ee2912916503839ea1b336f692da5ff89",
   );
 });
 
@@ -154,12 +154,15 @@ test("UI output and state are privacy bounded and make no hardware claim", () =>
     "reading-identity",
     "read-complete",
     "scope-mismatch",
+    "api-unsupported",
     "cancelled",
     "unavailable",
     "failed",
   ]) {
     assert.ok(app.includes(`"${phase}"`), `missing bounded UI phase: ${phase}`);
   }
+  assert.match(app, /"api-unsupported": "إصدار واجهة وحدة التحكم غير مدعوم حاليًا"/);
+  assert.match(app, /connection\.phase !== "api-unsupported"/);
 });
 
 test("diagnostic UI is collapsed, RAM-only, owner-copyable, and owner-clearable", () => {

@@ -22,7 +22,7 @@
 //! an empty payload. Raw request/reply payloads are never logged; the transport's audit sink
 //! records metadata only.
 
-use ade_facts::DeviceIdentity;
+use ade_facts::{ApiScopeStatus, DeviceIdentity, check_m1_api_scope};
 use ade_protocol_msp::{
     ApiVersion, BeeperConfigSnapshot, CommandId, Correlator, Direction, FcVariant, FcVersion,
     Frame, MspError, ReplyClass, SetBeeperConfig, decode_frame, encode_frame,
@@ -147,8 +147,13 @@ pub enum ExecError {
     IdentificationRequestPending,
     /// A response arrived without an identification request in flight.
     NoIdentificationRequestPending,
-    /// The four-command identification sequence has already completed.
+    /// The identification sequence has reached a terminal supported or unsupported result.
     IdentificationAlreadyComplete,
+    /// A structurally valid API reply is outside the proposed product scope.
+    ApiScopeMismatch {
+        /// Stable field label; never a raw payload or device value.
+        field: &'static str,
+    },
 }
 
 impl From<TransportError> for ExecError {
@@ -163,7 +168,7 @@ impl From<MspError> for ExecError {
     }
 }
 
-/// One Rust-authorised request from the canonical four-command identification sequence.
+/// One Rust-authorised request from the canonical four-command identification prefix.
 ///
 /// The command and frame are created together in Rust. Callers may transmit the bytes but
 /// cannot select or replace the command through this type.
@@ -171,6 +176,24 @@ impl From<MspError> for ExecError {
 pub struct IdentificationRequest {
     command: CommandId,
     bytes: Vec<u8>,
+}
+
+/// Typed progress from the Rust-owned read-only identification state machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentificationProgress {
+    /// The exact supported API path requires the next canonical empty-payload read.
+    Pending,
+    /// All four supported replies produced a complete device identity.
+    Complete(DeviceIdentity),
+    /// The API reply was structurally valid but outside the proposed product scope.
+    ///
+    /// No variant, firmware version, board information, or complete identity exists here.
+    ApiScopeMismatch {
+        /// The only parsed fact available at this point.
+        api: ApiVersion,
+        /// Stable scope field label.
+        field: &'static str,
+    },
 }
 
 impl IdentificationRequest {
@@ -187,7 +210,7 @@ impl IdentificationRequest {
     }
 }
 
-/// Current step in the fixed four-read identity sequence.
+/// Current step in the fixed four-read identity sequence or its early API-scope terminal.
 ///
 /// This is observation-only state. It exposes neither a command constructor nor a way to
 /// advance or replace the Rust-owned sequence.
@@ -201,7 +224,7 @@ pub enum IdentificationStage {
     FcVersion,
     /// Waiting for `MSP_BOARD_INFO`.
     BoardInfo,
-    /// All four typed replies were accepted.
+    /// The supported path accepted all four replies, or a valid unsupported API stopped early.
     Complete,
 }
 
@@ -220,8 +243,9 @@ impl IdentificationStage {
 /// Incremental form of the existing canonical identification implementation.
 ///
 /// Native Mock/Replay and the browser effect bridge both use this exact state machine. It
-/// owns the four-command order, strict response correlation, typed payload decoders and
-/// `DeviceIdentity` construction. It accepts no approval and has no write operation.
+/// owns the maximum four-command order, the API-only early stop, strict response correlation,
+/// typed payload decoders and `DeviceIdentity` construction. It accepts no approval and has no
+/// write operation.
 #[derive(Debug)]
 pub struct ReadonlyIdentification {
     stage: IdentificationStage,
@@ -280,13 +304,13 @@ impl ReadonlyIdentification {
 
     /// Accept exactly one complete response and advance the canonical identity state.
     ///
-    /// Returns the typed identity only after `BOARD_INFO`; earlier successful responses
-    /// return `None`.
+    /// Returns a complete identity only after `BOARD_INFO`. A valid unsupported API becomes
+    /// terminal immediately after `API_VERSION`; otherwise the sequence remains pending.
     ///
     /// # Errors
     /// Refuses missing/out-of-order/duplicate/wrong-command/error-direction responses or any
     /// typed payload decode failure.
-    pub fn accept_response(&mut self, frame: &Frame) -> Result<Option<DeviceIdentity>, ExecError> {
+    pub fn accept_response(&mut self, frame: &Frame) -> Result<IdentificationProgress, ExecError> {
         if !self.request_pending {
             return Err(ExecError::NoIdentificationRequestPending);
         }
@@ -322,41 +346,52 @@ impl ReadonlyIdentification {
         self.request_pending = false;
         match self.stage {
             IdentificationStage::ApiVersion => {
-                self.api = Some(ApiVersion::from_reply(frame)?);
-                self.stage = IdentificationStage::FcVariant;
-                Ok(None)
+                let api = ApiVersion::from_reply(frame)?;
+                match check_m1_api_scope(&api) {
+                    ApiScopeStatus::InScope => {
+                        self.api = Some(api);
+                        self.stage = IdentificationStage::FcVariant;
+                        Ok(IdentificationProgress::Pending)
+                    }
+                    ApiScopeStatus::Mismatch { field } => {
+                        self.stage = IdentificationStage::Complete;
+                        Ok(IdentificationProgress::ApiScopeMismatch { api, field })
+                    }
+                }
             }
             IdentificationStage::FcVariant => {
                 self.variant = Some(FcVariant::from_reply(frame)?);
                 self.stage = IdentificationStage::FcVersion;
-                Ok(None)
+                Ok(IdentificationProgress::Pending)
             }
             IdentificationStage::FcVersion => {
                 self.version = Some(FcVersion::from_reply(frame)?);
                 self.stage = IdentificationStage::BoardInfo;
-                Ok(None)
+                Ok(IdentificationProgress::Pending)
             }
             IdentificationStage::BoardInfo => {
                 let board = ade_protocol_msp::BoardInfo::from_reply(frame)?;
                 self.stage = IdentificationStage::Complete;
-                Ok(Some(DeviceIdentity::from_parts(
-                    self.api
-                        .take()
-                        .ok_or(ExecError::NoIdentificationRequestPending)?,
-                    self.variant
-                        .take()
-                        .ok_or(ExecError::NoIdentificationRequestPending)?,
-                    self.version
-                        .take()
-                        .ok_or(ExecError::NoIdentificationRequestPending)?,
-                    &board,
-                )))
+                Ok(IdentificationProgress::Complete(
+                    DeviceIdentity::from_parts(
+                        self.api
+                            .take()
+                            .ok_or(ExecError::NoIdentificationRequestPending)?,
+                        self.variant
+                            .take()
+                            .ok_or(ExecError::NoIdentificationRequestPending)?,
+                        self.version
+                            .take()
+                            .ok_or(ExecError::NoIdentificationRequestPending)?,
+                        &board,
+                    ),
+                ))
             }
             IdentificationStage::Complete => Err(ExecError::IdentificationAlreadyComplete),
         }
     }
 
-    /// Whether all four responses have been accepted.
+    /// Whether the sequence reached a terminal complete-identity or unsupported-API result.
     #[must_use]
     pub const fn is_complete(&self) -> bool {
         matches!(self.stage, IdentificationStage::Complete)
@@ -552,8 +587,12 @@ impl Executor {
         loop {
             let request = identification.next_request()?;
             let reply = decode_frame(&transport.exchange(request.bytes())?)?;
-            if let Some(identity) = identification.accept_response(&reply)? {
-                return Ok(identity);
+            match identification.accept_response(&reply)? {
+                IdentificationProgress::Pending => {}
+                IdentificationProgress::Complete(identity) => return Ok(identity),
+                IdentificationProgress::ApiScopeMismatch { field, .. } => {
+                    return Err(ExecError::ApiScopeMismatch { field });
+                }
             }
         }
     }
@@ -944,8 +983,12 @@ mod tests {
             let request = incremental.next_request().unwrap();
             commands.push(request.command());
             let reply = decode_frame(&fc.respond(request.bytes()).unwrap()).unwrap();
-            if let Some(identity) = incremental.accept_response(&reply).unwrap() {
-                break identity;
+            match incremental.accept_response(&reply).unwrap() {
+                IdentificationProgress::Pending => {}
+                IdentificationProgress::Complete(identity) => break identity,
+                IdentificationProgress::ApiScopeMismatch { .. } => {
+                    panic!("the supported mock API cannot be rejected")
+                }
             }
         };
 
@@ -964,6 +1007,43 @@ mod tests {
             incremental.next_request().unwrap_err(),
             ExecError::IdentificationAlreadyComplete
         );
+    }
+
+    #[test]
+    fn unsupported_api_versions_end_the_sequence_after_the_first_empty_read() {
+        for (payload, field) in [
+            ([0, 1, 45], "msp_api_version"),
+            ([0, 1, 47], "msp_api_version"),
+            ([0, 2, 46], "msp_api_version"),
+            ([1, 1, 46], "protocol_version"),
+        ] {
+            let mut identification =
+                ReadonlyIdentification::new(SessionState::Identifying).unwrap();
+            let request = identification.next_request().unwrap();
+            assert_eq!(request.command(), CommandId::ApiVersion);
+            assert_eq!(decode_frame(request.bytes()).unwrap().payload_len(), 0);
+
+            let reply = decode_frame(
+                &encode_frame(Direction::Reply, CommandId::ApiVersion, &payload).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                identification.accept_response(&reply).unwrap(),
+                IdentificationProgress::ApiScopeMismatch {
+                    api: ApiVersion {
+                        protocol_version: payload[0],
+                        api_major: payload[1],
+                        api_minor: payload[2],
+                    },
+                    field,
+                }
+            );
+            assert!(identification.is_complete());
+            assert_eq!(
+                identification.next_request().unwrap_err(),
+                ExecError::IdentificationAlreadyComplete,
+            );
+        }
     }
 
     #[test]

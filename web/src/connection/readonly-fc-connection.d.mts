@@ -47,7 +47,12 @@ export type IdentityFailureReason =
   | "OtherProtocolIdentityFailure";
 
 export interface PrivacyBoundedIdentityResult {
-  outcome: "in-scope" | "scope-mismatch" | "failed" | "pending";
+  outcome:
+    | "in-scope"
+    | "scope-mismatch"
+    | "api-unsupported"
+    | "failed"
+    | "pending";
   apiVersion?: string;
   fcVariant?: string;
   fcVersion?: string;

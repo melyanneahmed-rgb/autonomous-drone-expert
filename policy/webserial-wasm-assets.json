@@ -11,8 +11,8 @@
     },
     "rust_source": {
       "path": "crates/web-readonly-serial-wasm-bridge/src/lib.rs",
-      "git_blob_sha1": "efa1b95cd0440b98f3fe7f85295afe0a7f72e456",
-      "sha256": "8221c03bd93aea0380561a75167ff9f94c76c30b2c5a4e733f38b50435bda2b0"
+      "git_blob_sha1": "d0d8f8777f31416fdbe07883d6f36d18a538b587",
+      "sha256": "7f7c8f7f56e68847f570e16769e7107bbb93c36374e86e9e093acd22f1432e1a"
     },
     "build_toolchain": "1.85.0",
     "target": "wasm32-unknown-unknown",
@@ -52,8 +52,8 @@
     },
     {
       "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
-      "sha256": "3ddaed07385e83d02b68d5f3269c9c98ce009da12dae8d6415120ac70a2b3d2f",
-      "size": 62173
+      "sha256": "674e156f0f3afd8d6fbaae32a2d6d5d5bb1ff90387c9c553aad50a6bdd61bde2",
+      "size": 62959
     }
   ],
   "verification": {
