@@ -72,28 +72,62 @@ jobs:
       - name: Install product MSRV with browser target
         run: rustup toolchain install 1.85.0 --profile minimal --target wasm32-unknown-unknown
 
-      - name: Build audited Rust WASM bridges
+      - name: Install pinned isolated generator toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+
+      - name: Build storage-only Rust bridge at MSRV
         run: |
           cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
+
+      - name: Build read-only Web Serial Rust bridge at MSRV
+        env:
+          RUSTFLAGS: >-
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/convert/slices.rs=/source/wasm-bindgen/src/convert/slices.rs
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/externref.rs=/source/wasm-bindgen/src/externref.rs
+            --remap-path-prefix=crates/protocol-msp/src/lib.rs=/source/project/crates/protocol-msp/src/lib.rs
+        run: |
           cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
-          mkdir -p target/storage-wasm-web target/webserial-wasm-web
+
+      - name: Generate storage-only Web glue
+        run: |
+          mkdir -p target/storage-wasm-web
           cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
             target/wasm32-unknown-unknown/release/ade_web_storage_wasm_bridge.wasm \
             target/storage-wasm-web
-          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+
+      - name: Generate canonical read-only Web Serial Web glue
+        run: |
+          mkdir -p target/webserial-wasm-product-regenerated
+          cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
             target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
-            target/webserial-wasm-web
-          python3 scripts/prepare_web_wasm.py
+            target/webserial-wasm-product-regenerated
+
+      - name: Prove regenerated serial product assets reproduce byte-for-byte
+        run: |
+          python3 scripts/verify_webserial_product_assets.py \
+            --input-wasm target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            --generated-dir target/webserial-wasm-product-regenerated
+
+      - name: Stage exact same-origin WASM production assets
+        run: |
+          python3 scripts/prepare_web_wasm.py \
+            --serial-root target/webserial-wasm-product-regenerated
+
+      - name: Prove staged serial assets remain byte-identical to selected source
+        run: |
+          git diff --exit-code -- \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge.js \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm
 
       - name: Exercise existing browser storage and Web Serial gates at both scopes
         working-directory: web
         run: |
           node --experimental-websocket tests/indexeddb-browser-smoke.mjs /
           node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web /
-          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web /
+          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-product-regenerated /
           node --experimental-websocket tests/indexeddb-browser-smoke.mjs /autonomous-drone-expert/
           node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web /autonomous-drone-expert/
-          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web /autonomous-drone-expert/
+          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-product-regenerated /autonomous-drone-expert/
 
       - name: Exercise root production build, offline shell, and update transition
         working-directory: web
@@ -120,6 +154,15 @@ jobs:
           ADE_WEB_BASE_PATH=/autonomous-drone-expert/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
           node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
             dist /autonomous-drone-expert/ "$SOURCE_SHA" "$RUNNER_TEMP/web-subpath-old" "$old_sha"
+
+      - name: Prove final Pages dist contains canonical serial product assets
+        run: |
+          cmp --silent \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge.js \
+            web/dist/wasm/ade_web_readonly_serial_wasm_bridge.js
+          cmp --silent \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm \
+            web/dist/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm
 
       - name: Security audit and immutable dependency proof
         run: |
@@ -161,7 +204,7 @@ jobs:
             echo "- Commit SHA: \`$SOURCE_SHA\`"
             echo "- Tree SHA: \`$TREE_SHA\`"
             echo "- Build timestamp (UTC): \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\`"
-            echo "- Tools: npm 11.13.0; Vite 8.2.1; Rust 1.85.0; wasm-bindgen 0.2.127"
+            echo "- Tools: npm 11.13.0; Vite 8.2.1; Rust 1.85.0; isolated generator Rust 1.97.1; wasm-bindgen 0.2.127"
             echo "- Canonical CI: $CI_RUN_URL"
             echo "- Build result: passed"
             echo "- Root and repository-subpath browser tests: passed"
