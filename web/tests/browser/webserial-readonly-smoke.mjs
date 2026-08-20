@@ -13,7 +13,7 @@ const IN_SCOPE_REPLIES = [
 ].map((bytes) => Uint8Array.from(bytes));
 const API_SCOPE_REPLIES = [
   ["lower-minor", [36, 77, 62, 3, 1, 0, 1, 45, 46], "1.45", "normal"],
-  ["higher-minor", [36, 77, 62, 3, 1, 0, 1, 48, 19], "1.48", "split-frame"],
+  ["higher-minor", [36, 77, 62, 3, 1, 0, 1, 48, 51], "1.48", "split-frame"],
   ["incompatible-major", [36, 77, 62, 3, 1, 0, 2, 46, 46], "2.46", "whole-frame"],
   ["incompatible-protocol", [36, 77, 62, 3, 1, 1, 1, 46, 44], "1.46", "normal"],
 ];
