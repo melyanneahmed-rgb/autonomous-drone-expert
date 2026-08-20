@@ -1,0 +1,190 @@
+name: TEMP M3 API147 Integrator — NEVER MERGE
+
+on:
+  push:
+    branches:
+      - feat/m3-api147-readonly-identification
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    name: One-shot source integration and canonical WASM regeneration
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact integration branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/m3-api147-readonly-identification
+          persist-credentials: true
+          fetch-depth: 2
+
+      - name: Assert temporary inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f scripts/tmp_m3_api147_integrate.py
+          test -f .github/workflows/tmp-m3-api147-integrator.yml
+          test "$(git rev-parse HEAD)" = "f77ffefda13f5649e04c630366b0fdbe39f97a77"
+
+      - name: Apply fail-closed source integration
+        run: python3 scripts/tmp_m3_api147_integrate.py
+
+      - name: Canonical Rust formatting
+        run: cargo fmt --all
+
+      - name: Refresh only first-party workspace lock edges
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p ade-execution -p ade-readonly-profile -p ade-web-readonly-serial-wasm-bridge
+          python3 - <<'PY'
+          import re
+          import subprocess
+          from pathlib import Path
+
+          before = subprocess.check_output(
+              ["git", "show", "HEAD:Cargo.lock"], text=True
+          )
+          after = Path("Cargo.lock").read_text(encoding="utf-8")
+
+          def registry_records(text: str):
+              records = []
+              for block in text.split("[[package]]")[1:]:
+                  if 'source = "registry+' in block:
+                      name = re.search(r'^name = "([^"]+)"', block, re.M)
+                      version = re.search(r'^version = "([^"]+)"', block, re.M)
+                      checksum = re.search(r'^checksum = "([^"]+)"', block, re.M)
+                      records.append((
+                          name.group(1) if name else None,
+                          version.group(1) if version else None,
+                          checksum.group(1) if checksum else None,
+                      ))
+              return records
+
+          if registry_records(before) != registry_records(after):
+              raise SystemExit("registry package/version/checksum drift in Cargo.lock")
+          print("Cargo.lock registry closure unchanged")
+          PY
+
+      - name: Install canonical product and generator toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.85.0 --profile minimal --target wasm32-unknown-unknown
+          rustup toolchain install 1.97.1 --profile minimal
+
+      - name: Build canonical read-only Web Serial WASM input
+        env:
+          RUSTFLAGS: >-
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/convert/slices.rs=/source/wasm-bindgen/src/convert/slices.rs
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/externref.rs=/source/wasm-bindgen/src/externref.rs
+            --remap-path-prefix=crates/protocol-msp/src/lib.rs=/source/project/crates/protocol-msp/src/lib.rs
+        run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
+
+      - name: Generate canonical Web Serial product assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target/webserial-wasm-product-regenerated
+          mkdir -p target/webserial-wasm-product-regenerated
+          cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+            target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            target/webserial-wasm-product-regenerated
+          cp target/webserial-wasm-product-regenerated/ade_web_readonly_serial_wasm_bridge.js \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge.js
+          cp target/webserial-wasm-product-regenerated/ade_web_readonly_serial_wasm_bridge_bg.wasm \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm
+
+      - name: Refresh canonical asset provenance hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path('.')
+          manifest_path = root / 'policy/webserial-wasm-assets.json'
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+
+          def sha256(path: Path) -> str:
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          def blob_sha1(path: Path) -> str:
+              content = path.read_bytes()
+              return hashlib.sha1(
+                  f"blob {len(content)}\0".encode() + content,
+                  usedforsecurity=False,
+              ).hexdigest()
+
+          source_record = manifest['source']['rust_source']
+          source_path = root / source_record['path']
+          source_record['sha256'] = sha256(source_path)
+          source_record['git_blob_sha1'] = blob_sha1(source_path)
+
+          for record in manifest['outputs']:
+              path = root / record['path']
+              record['sha256'] = sha256(path)
+              record['size'] = path.stat().st_size
+
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2, ensure_ascii=False) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Prove canonical product asset regeneration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_webserial_product_assets.py \
+            --input-wasm target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            --generated-dir target/webserial-wasm-product-regenerated
+
+      - name: Focused Rust and authority validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo test -p ade-readonly-profile
+          cargo test -p ade-execution
+          cargo test -p ade-web-readonly-serial-wasm-bridge
+          python3 scripts/check_webserial_boundary.py
+          python3 scripts/check_unsafe.py
+          python3 scripts/check_provenance.py
+
+      - name: Web source and build validation
+        working-directory: web
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes npm@11.13.0 ci --ignore-scripts
+          npx --yes npm@11.13.0 run typecheck
+          npx --yes npm@11.13.0 test
+
+      - name: Final diff and temporary-file deletion
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          rm scripts/tmp_m3_api147_integrate.py
+          rm .github/workflows/tmp-m3-api147-integrator.yml
+          test ! -e scripts/tmp_m3_api147_integrate.py
+          test ! -e .github/workflows/tmp-m3-api147-integrator.yml
+          git diff --check
+
+      - name: Commit reviewed one-shot result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "FPV-Arabic"
+          git config user.email "295969497+melyanneahmed-rgb@users.noreply.github.com"
+          git add -A
+          test -z "$(git ls-files --error-unmatch scripts/tmp_m3_api147_integrate.py 2>/dev/null || true)"
+          test -z "$(git ls-files --error-unmatch .github/workflows/tmp-m3-api147-integrator.yml 2>/dev/null || true)"
+          git diff --cached --check
+          git commit -m "feat(m3): integrate API 1.47 read-only identification"
+          git push origin HEAD:feat/m3-api147-readonly-identification
