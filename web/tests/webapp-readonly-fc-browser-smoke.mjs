@@ -97,6 +97,17 @@ function installFakeSerial(scenario) {
     [36, 77, 62, 3, 3, 4, 5, 5, 4],
     [36, 77, 62, 88, 4, 83, 52, 48, 53, 0, 0, 0, 0, 15, 83, 80, 69, 69, 68, 89, 66, 69, 69, 70, 52, 48, 53, 86, 52, 17, 83, 112, 101, 101, 100, 121, 66, 101, 101, 32, 70, 52, 48, 53, 32, 86, 52, 3, 83, 80, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66],
   ].map((bytes) => Uint8Array.from(bytes));
+  const testReply = (command, payload) => {
+    let checksum = payload.length ^ command;
+    for (const byte of payload) checksum ^= byte;
+    return Uint8Array.from([36, 77, 62, payload.length, command, ...payload, checksum]);
+  };
+  const api147Replies = [
+    testReply(1, [0, 1, 47]),
+    testReply(2, [...new TextEncoder().encode("BTFL")]),
+    testReply(3, [25, 12, 1, 9, ...new TextEncoder().encode("2025.12.1")]),
+    inScopeReplies[3],
+  ];
   const boardPayloadWithTrailingByte = [...inScopeReplies[3].slice(5, -1), 0];
   let boardChecksum = boardPayloadWithTrailingByte.length ^ 4;
   for (const byte of boardPayloadWithTrailingByte) boardChecksum ^= byte;
@@ -104,8 +115,10 @@ function installFakeSerial(scenario) {
     36, 77, 62, boardPayloadWithTrailingByte.length, 4,
     ...boardPayloadWithTrailingByte, boardChecksum,
   ]);
-  const replies = scenario === "api-unsupported-147" || scenario === "fragmented-api-version"
-    ? [Uint8Array.from([36, 77, 62, 3, 1, 0, 1, 47, 44])]
+  const replies = scenario === "api147-read-only"
+    ? api147Replies
+    : scenario === "fragmented-api-version"
+      ? [testReply(1, [0, 1, 48])]
     : scenario === "api-unsupported-major"
       ? [Uint8Array.from([36, 77, 62, 3, 1, 0, 2, 46, 46])]
       : scenario === "malformed-api-version"
@@ -264,6 +277,8 @@ async function waitForTerminalPhase(evaluate, label) {
   const terminal = new Set([
     "read-complete",
     "scope-mismatch",
+    "read-only-complete",
+    "read-profile-unsupported",
     "api-unsupported",
     "cancelled",
     "unavailable",
@@ -498,16 +513,22 @@ try {
   const api147 = await runScenario(
     browser,
     url,
-    "api-unsupported-147",
-    "api-unsupported",
+    "api147-read-only",
+    "read-only-complete",
     2,
   );
   if (
-    JSON.stringify(api147.writes) !== JSON.stringify([expectedRequests[0], expectedRequests[0]]) ||
-    Object.keys(api147.fields).length !== 0 ||
-    api147.openCount !== 2 || api147.closeCount !== 2 ||
-    api147.text.includes("1.47") || api147.text.includes("msp_api_version")
-  ) throw new Error(`PRODUCTION_API_147_GATE_FAILED:${JSON.stringify(api147)}`);
+    JSON.stringify(api147.writes) !== JSON.stringify([
+      ...expectedRequests,
+      ...expectedRequests,
+    ]) ||
+    api147.fields.apiVersion !== "1.47" ||
+    api147.fields.fcVariant !== "BTFL" ||
+    api147.fields.fcVersion !== "2025.12.1" ||
+    api147.fields.targetName !== "SPEEDYBEEF405V4" ||
+    api147.fields.scopeMismatchField !== undefined ||
+    api147.openCount !== 2 || api147.closeCount !== 2
+  ) throw new Error(`PRODUCTION_API_147_READONLY_PROOF_FAILED:${JSON.stringify(api147)}`);
 
   const major = await runScenario(
     browser,

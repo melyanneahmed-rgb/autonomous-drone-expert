@@ -13,9 +13,20 @@ const IN_SCOPE_REPLIES = [
 ].map((bytes) => Uint8Array.from(bytes));
 const API_SCOPE_REPLIES = [
   ["lower-minor", [36, 77, 62, 3, 1, 0, 1, 45, 46], "1.45", "normal"],
-  ["higher-minor", [36, 77, 62, 3, 1, 0, 1, 47, 44], "1.47", "split-frame"],
+  ["higher-minor", [36, 77, 62, 3, 1, 0, 1, 48, 19], "1.48", "split-frame"],
   ["incompatible-major", [36, 77, 62, 3, 1, 0, 2, 46, 46], "2.46", "whole-frame"],
   ["incompatible-protocol", [36, 77, 62, 3, 1, 1, 1, 46, 44], "1.46", "normal"],
+];
+function testReply(command, payload) {
+  let checksum = payload.length ^ command;
+  for (const byte of payload) checksum ^= byte;
+  return Uint8Array.from([36, 77, 62, payload.length, command, ...payload, checksum]);
+}
+const API147_READONLY_REPLIES = [
+  testReply(1, [0, 1, 47]),
+  testReply(2, [...new TextEncoder().encode("BTFL")]),
+  testReply(3, [25, 12, 1, 9, ...new TextEncoder().encode("2025.12.1")]),
+  IN_SCOPE_REPLIES[3],
 ];
 const FULL_SCOPE_MISMATCH_REPLIES = [
   ...IN_SCOPE_REPLIES.slice(0, 2),
@@ -512,6 +523,22 @@ async function scenarioHScopeMismatch() {
   assert(port.writes.length === 2, "unsupported retries send only one API read each");
 }
 
+async function scenarioH2Api147ReadOnly() {
+  mark("H2-api147-read-only");
+  const run = await runDiscovery(API147_READONLY_REPLIES);
+  assert(run.result.outcome === "read-only-complete", "API 1.47 completes read-only identity");
+  assert(run.result.apiVersion === "1.47", "API 1.47 is retained");
+  assert(run.result.fcVariant === "BTFL", "API 1.47 exact variant retained");
+  assert(run.result.fcVersion === "2025.12.1", "API 1.47 strict version string retained");
+  assert(run.result.targetName === "SPEEDYBEEF405V4", "API 1.47 target retained");
+  assert(run.result.scopeMismatchField === undefined, "read-only completion is not API unsupported");
+  assert(run.result.hardwareObserved === false, "read-only completion is not hardware validation");
+  assert(run.port.writes.length === 4, "API 1.47 uses exactly four empty reads");
+  EXPECTED_REQUESTS.forEach((expected, index) =>
+    assert(equalBytes(run.port.writes[index], expected), `API 1.47 request order ${index}`),
+  );
+}
+
 async function scenarioIHostFailureOriginsAndRetry() {
   mark("I-host-origins-retry");
   const cases = [
@@ -624,6 +651,7 @@ async function run() {
   scenarioECorrelation();
   await scenarioFFailClosed();
   await scenarioHScopeMismatch();
+  await scenarioH2Api147ReadOnly();
   await scenarioIHostFailureOriginsAndRetry();
   await scenarioJStreamAndStageMatrix();
 }

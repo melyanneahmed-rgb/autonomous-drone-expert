@@ -18,6 +18,8 @@ type ConnectionPhase =
   | "reading-identity"
   | "read-complete"
   | "scope-mismatch"
+  | "read-only-complete"
+  | "read-profile-unsupported"
   | "api-unsupported"
   | "cancelled"
   | "unavailable"
@@ -151,6 +153,8 @@ const connectionCopy: Record<ConnectionPhase, string> = {
   "reading-identity": "جارٍ قراءة الهوية الآمنة…",
   "read-complete": "اكتملت قراءة الهوية ضمن النطاق المقترح",
   "scope-mismatch": "اكتملت القراءة — الهوية خارج النطاق المقترح",
+  "read-only-complete": "اكتملت قراءة الهوية — هذا الإصدار مدعوم للقراءة فقط",
+  "read-profile-unsupported": "نوع وحدة التحكم غير مدعوم ضمن ملفات القراءة الحالية",
   "api-unsupported": "إصدار واجهة وحدة التحكم غير مدعوم حاليًا",
   cancelled: "أُلغي اختيار المنفذ دون قراءة الجهاز",
   unavailable: "واجهة الاتصال التسلسلي غير متاحة في هذا المتصفح",
@@ -331,6 +335,10 @@ export default function App() {
         setConnection({ phase: "read-complete", result });
       } else if (result.outcome === "scope-mismatch") {
         setConnection({ phase: "scope-mismatch", result });
+      } else if (result.outcome === "read-only-complete") {
+        setConnection({ phase: "read-only-complete", result });
+      } else if (result.outcome === "read-profile-unsupported") {
+        setConnection({ phase: "read-profile-unsupported", result });
       } else if (result.outcome === "api-unsupported") {
         setConnection({ phase: "api-unsupported", result });
       } else {
@@ -901,7 +909,9 @@ export default function App() {
               >
                 {connectionButtonCopy}
               </button>
-              {connection.result && connection.phase !== "api-unsupported" && (
+              {connection.result &&
+                connection.phase !== "api-unsupported" &&
+                connection.phase !== "read-profile-unsupported" && (
                 <dl className="connection-identity" aria-label="هوية وحدة التحكم المقروءة">
                   {connection.result.apiVersion && (
                     <div data-identity-field="apiVersion">
