@@ -112,6 +112,14 @@ name = "ade-protocol-msp"
 version = "0.0.0"
 
 [[package]]
+name = "ade-readonly-profile"
+version = "0.0.0"
+dependencies = [
+ "ade-facts",
+ "ade-protocol-msp",
+]
+
+[[package]]
 name = "ade-recovery"
 version = "0.0.0"
 dependencies = [
