@@ -3,7 +3,7 @@
 #
 # Scope note (honesty): these gates cover the M0 policy foundation, the M1 Mock/Replay Rust
 # slice and the M2 product-core crates that are explicitly checked for WebAssembly. Gates
-# for UI interaction, USB/DFU, hardware and release publishing are deliberately absent. The
+# for USB/DFU, hardware and release publishing are deliberately absent. The production UI
 # serial gate is limited to Web Serial read-only identification with an injected CI device;
 # it makes no physical-hardware claim. M1 line/branch coverage remains fail-closed for the
 # five critical lifecycle files.
@@ -27,6 +27,7 @@ on:
       - feat/m2-web-indexeddb-journal
       - feat/m2-web-storage-wasm-bridge
       - feat/m2-webserial-readonly-discovery
+      - feat/m2-webapp-readonly-fc-connect
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -76,10 +77,18 @@ jobs:
       - name: Install product MSRV with browser target
         run: rustup toolchain install 1.85.0 --profile minimal --target wasm32-unknown-unknown
 
+      - name: Install pinned isolated generator toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+
       - name: Build the storage-only Rust bridge at MSRV
         run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-storage-wasm-bridge
 
       - name: Build the read-only Web Serial Rust bridge at MSRV
+        env:
+          RUSTFLAGS: >-
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/convert/slices.rs=/source/wasm-bindgen/src/convert/slices.rs
+            --remap-path-prefix=/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-0.2.127/src/externref.rs=/source/wasm-bindgen/src/externref.rs
+            --remap-path-prefix=crates/protocol-msp/src/lib.rs=/source/project/crates/protocol-msp/src/lib.rs
         run: cargo +1.85.0 build --locked --release --target wasm32-unknown-unknown -p ade-web-readonly-serial-wasm-bridge
 
       - name: Generate Web glue with the isolated pinned tool
@@ -95,30 +104,32 @@ jobs:
 
       - name: Generate read-only Web Serial Web glue with the isolated pinned tool
         run: |
-          mkdir -p target/webserial-wasm-web
-          cargo run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
+          mkdir -p target/webserial-wasm-product-regenerated
+          cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- \
             target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
-            target/webserial-wasm-web
+            target/webserial-wasm-product-regenerated
+
+      - name: Prove committed product WASM assets reproduce byte-for-byte
+        run: |
+          python3 scripts/verify_webserial_product_assets.py \
+            --input-wasm target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
+            --generated-dir target/webserial-wasm-product-regenerated
 
       - name: Real Chrome Rust WASM and Web Serial read-only gate
         working-directory: web
-        run: node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web
+        run: node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-product-regenerated
 
       - name: Stage exact same-origin WASM production assets
-        run: python3 scripts/prepare_web_wasm.py
+        run: >-
+          python3 scripts/prepare_web_wasm.py
+          --serial-root target/webserial-wasm-product-regenerated
 
       - name: Real browser gates at the repository Pages scope
         working-directory: web
         run: |
           node --experimental-websocket tests/indexeddb-browser-smoke.mjs /autonomous-drone-expert/
           node --experimental-websocket tests/storage-wasm-browser-smoke.mjs ../target/storage-wasm-web /autonomous-drone-expert/
-          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-web /autonomous-drone-expert/
-
-      - name: Production build
-        working-directory: web
-        env:
-          ADE_BUILD_SHA: ${{ github.sha }}
-        run: npx --yes npm@11.13.0 run build
+          node --experimental-websocket tests/webserial-readonly-browser-smoke.mjs ../target/webserial-wasm-product-regenerated /autonomous-drone-expert/
 
       - name: Root production delivery and PWA update gate
         working-directory: web
@@ -132,6 +143,7 @@ jobs:
           ADE_WEB_BASE_PATH=/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
           node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
             dist / "$SOURCE_SHA" "$RUNNER_TEMP/web-root-old" "$old_sha"
+          node --experimental-websocket tests/webapp-readonly-fc-browser-smoke.mjs dist /
 
       - name: Repository-subpath production delivery and PWA update gate
         working-directory: web
@@ -145,6 +157,8 @@ jobs:
           ADE_WEB_BASE_PATH=/autonomous-drone-expert/ ADE_BUILD_SHA="$SOURCE_SHA" npx --yes npm@11.13.0 run build
           node --experimental-websocket tests/production-delivery-browser-smoke.mjs \
             dist /autonomous-drone-expert/ "$SOURCE_SHA" "$RUNNER_TEMP/web-subpath-old" "$old_sha"
+          node --experimental-websocket tests/webapp-readonly-fc-browser-smoke.mjs \
+            dist /autonomous-drone-expert/
 
       - name: Public Pages artifact privacy gate
         run: python3 scripts/check_public_web_artifact.py web/dist
@@ -175,6 +189,9 @@ jobs:
 
       - name: Web Serial read-only authority gate
         run: python3 scripts/check_webserial_boundary.py
+
+      - name: Checked-in Web Serial product asset provenance gate
+        run: python3 scripts/verify_webserial_product_assets.py
 
       - name: Android packaging authority and dependency gate
         run: python3 scripts/check_android_validation.py

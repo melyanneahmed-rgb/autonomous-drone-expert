@@ -47,11 +47,12 @@ test("React, bootstrap, and service worker do not own or invoke the journal adap
   }
 });
 
-test("approved visible UI and dependency lock remain byte-for-byte frozen", () => {
-  assert.equal(sha256("src/App.tsx"), "1d4d44c43832d9fd17d4e0f594114814426e44f6017b14d550e04e990b8c98f9");
-  assert.equal(sha256("src/styles.css"), "d74f07088a3b206fc66661eea4682f083f6b7a1b08dbaa5b399818672356a3c4");
+test("storage integration cannot drift dependency locks or approved visual identity", () => {
   assert.equal(sha256("package.json"), "59c01b1db0bb904a1be453371cfaf8c27a883ebceb0b55bb07e65bc22388a586");
   assert.equal(sha256("package-lock.json"), "c3015e9454da094d307975921b8aa2c195a15b9dffe0498a9c758b57d922c05d");
+  assert.match(readWeb("src/App.tsx"), /Smart Configurator/);
+  assert.match(readWeb("src/App.tsx"), /عرّف درونك\./);
+  assert.match(readWeb("src/styles.css"), /--ink:\s*#10231f/);
   const policy = JSON.parse(fs.readFileSync(path.join(repoRoot, "policy", "web-dependencies.json"), "utf8"));
   assert.equal(policy.approved_lockfile_sha256, "c3015e9454da094d307975921b8aa2c195a15b9dffe0498a9c758b57d922c05d");
 });

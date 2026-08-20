@@ -1,5 +1,12 @@
 declare const __ADE_BUILD_SHA__: string;
 
+const OFFLINE_RUNTIME_ASSET_PATHS = [
+  "wasm/ade_web_storage_wasm_bridge.js",
+  "wasm/ade_web_storage_wasm_bridge_bg.wasm",
+  "wasm/ade_web_readonly_serial_wasm_bridge.js",
+  "wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+] as const;
+
 function workerHasBuild(worker: ServiceWorker | null): worker is ServiceWorker {
   if (!worker || worker.state !== "activated") return false;
   return new URL(worker.scriptURL).searchParams.get("version") === __ADE_BUILD_SHA__;
@@ -106,7 +113,10 @@ export function registerPwa(): void {
         (element) =>
           element instanceof HTMLScriptElement ? element.src : (element as HTMLLinkElement).href,
       );
-      const resourceUrls = [...new Set([...performanceUrls, ...documentUrls])]
+      const runtimeUrls = OFFLINE_RUNTIME_ASSET_PATHS.map(
+        (relativePath) => new URL(relativePath, baseUrl).href,
+      );
+      const resourceUrls = [...new Set([...runtimeUrls, ...performanceUrls, ...documentUrls])]
         .filter((entryUrl) => {
           const url = new URL(entryUrl);
           return (

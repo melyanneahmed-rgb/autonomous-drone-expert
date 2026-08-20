@@ -3,18 +3,22 @@ import type {
   DiagnosticTraceEvent,
 } from "../diagnostics/readonly-trace.mjs";
 
-export type WebSerialFailure =
+export type ReadonlyFcFailure =
   | "Unavailable"
   | "Cancelled"
   | "PermissionDenied"
   | "PortBusy"
   | "Disconnected"
   | "Timeout"
+  | "MalformedResponse"
+  | "ProtocolIdentityFailure"
+  | "CloseFailure"
+  | "HardwareEvidenceBoundary"
   | "Unknown";
 
 export interface PortSelectionResult {
   ok: boolean;
-  failure?: WebSerialFailure;
+  failure?: ReadonlyFcFailure;
   failureOrigin?: DiagnosticOrigin;
 }
 
@@ -42,34 +46,31 @@ export type IdentityFailureReason =
   | "InvalidUtf8"
   | "OtherProtocolIdentityFailure";
 
-export interface ReadonlyDiscoveryResult {
+export interface PrivacyBoundedIdentityResult {
   outcome:
     | "in-scope"
     | "scope-mismatch"
     | "api-unsupported"
     | "failed"
     | "pending";
-  failure?: string;
-  failureOrigin?: DiagnosticOrigin;
-  failureStage?: IdentityFailureStage;
-  failureReason?: IdentityFailureReason;
-  scopeMismatchField?: string;
   apiVersion?: string;
   fcVariant?: string;
   fcVersion?: string;
   targetName?: string;
-  hardwareObserved: false;
+  scopeMismatchField?: string;
+  failure?: ReadonlyFcFailure | string;
+  failureOrigin?: DiagnosticOrigin;
+  failureStage?: IdentityFailureStage;
+  failureReason?: IdentityFailureReason;
 }
 
-export declare class WebSerialReadonlyHost {
-  constructor(options?: { serial?: object; timeoutMs?: number });
+export interface ReadonlyFcConnection {
   selectPortFromUserGesture(): Promise<PortSelectionResult>;
-  discover(): Promise<ReadonlyDiscoveryResult>;
+  discover(): Promise<PrivacyBoundedIdentityResult>;
   recordUiBoundaryFailure(): void;
-  recordHardwareEvidenceBoundary(): void;
   diagnosticTrace(): readonly DiagnosticTraceEvent[];
   safeDiagnosticTraceText(): string;
   clearDiagnosticTrace(): void;
 }
 
-export declare const WEB_SERIAL_READONLY_INITIAL_BAUD_RATE: 115200;
+export declare function prepareReadonlyFcConnection(): Promise<ReadonlyFcConnection>;

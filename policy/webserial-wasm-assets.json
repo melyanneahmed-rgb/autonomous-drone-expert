@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "classification": "derived-build-output-no-new-authority",
+  "source": {
+    "accepted_main_commit": "8ef20be74a34912de53030d28d29b5e4108ddd08",
+    "package": "ade-web-readonly-serial-wasm-bridge",
+    "manifest": {
+      "path": "crates/web-readonly-serial-wasm-bridge/Cargo.toml",
+      "git_blob_sha1": "972e14c29b36bdfe0bbe9c38638ba3d3692a574d",
+      "sha256": "5290337dadb331bc4e25020030a27e41f43b3c457319010ab60dd7ce85c1e608"
+    },
+    "rust_source": {
+      "path": "crates/web-readonly-serial-wasm-bridge/src/lib.rs",
+      "git_blob_sha1": "d0d8f8777f31416fdbe07883d6f36d18a538b587",
+      "sha256": "7f7c8f7f56e68847f570e16769e7107bbb93c36374e86e9e093acd22f1432e1a"
+    },
+    "build_toolchain": "1.85.0",
+    "target": "wasm32-unknown-unknown",
+    "deterministic_source_prefix": "/source/",
+    "input_wasm_hash_policy": "reported-per-trusted-build-not-cross-host-locked",
+    "input_wasm_published": false
+  },
+  "generator": {
+    "package": "wasm-bindgen-cli-support",
+    "version": "0.2.127",
+    "isolated_manifest": {
+      "path": "tools/wasm-bindgen-cli-support/Cargo.toml",
+      "git_blob_sha1": "cb15983a2a4860f6c3a5f5ceb92334f2248c5a9d",
+      "sha256": "01ab37364c7a7d76300743ff1beb339c92f61bd918452e3bfac5103bfe2825bb"
+    },
+    "isolated_lock": {
+      "path": "tools/wasm-bindgen-cli-support/Cargo.lock",
+      "git_blob_sha1": "b5334fac369066735dde55604f0a2fe7ec4260f6",
+      "sha256": "6b13d9e3029e446a9a09a9d7e0db0ad506af89340c484be744b105c67dc3c716"
+    },
+    "isolated_source": {
+      "path": "tools/wasm-bindgen-cli-support/src/main.rs",
+      "git_blob_sha1": "cd7ae438c10fa4a9f21d521cb624ffb66b66dec8",
+      "sha256": "a55e7efc93f1ff5fa9232fa960ab977abf114a93f61374c2392141b145d450cc"
+    },
+    "toolchain": "1.97.1",
+    "remove_name_section": true,
+    "canonical_environment": "github-actions/ubuntu-latest",
+    "canonical_workflow": ".github/workflows/ci.yml",
+    "generation_command": "cargo +1.97.1 run --locked --manifest-path tools/wasm-bindgen-cli-support/Cargo.toml -- target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm <temporary-output-directory>"
+  },
+  "outputs": [
+    {
+      "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge.js",
+      "sha256": "c383a32030cb6e361bed425be8a7ee1b1872fc8d270b9fdb90b15ab1d6d59f75",
+      "size": 23057
+    },
+    {
+      "path": "web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+      "sha256": "16a51b4e59498664241d92365bca56c3e9b34aa535154feab479fcfc3a46f3e3",
+      "size": 62823
+    }
+  ],
+  "verification": {
+    "script": "scripts/verify_webserial_product_assets.py",
+    "comparison": "byte-for-byte",
+    "required_dist_prefix": "dist/wasm/",
+    "canonical_capture": "required trusted-Linux regeneration at the immutable PR head"
+  }
+}

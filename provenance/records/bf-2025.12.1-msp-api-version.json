@@ -1,0 +1,39 @@
+{
+  "record_id": "bf-2025.12.1-msp-api-version",
+  "kind": "command_id",
+  "name": "MSP_API_VERSION",
+  "value": 1,
+  "firmware": {
+    "family": "Betaflight",
+    "version": "2025.12.1",
+    "msp_api_version": "1.47"
+  },
+  "source": {
+    "type": "upstream_firmware_source_read",
+    "repository": "betaflight/betaflight",
+    "ref_kind": "tag",
+    "ref": "2025.12.1",
+    "path": "src/main/msp/msp_protocol.h",
+    "url": "https://raw.githubusercontent.com/betaflight/betaflight/2025.12.1/src/main/msp/msp_protocol.h",
+    "retrieved_at": "2026-08-18",
+    "retrieved_by": "overnight-m2-readonly-investigation",
+    "resolved_commit": "85d201376a1fc33b223c27448808c2cc7b8f2743"
+  },
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": 3,
+    "note": "Read-only reply: protocol version u8, API major u8, API minor u8. The pinned tag declares protocol 0 and API 1.47. The API minor was raised from 46 to 47 by official commit dc40b8f65526a526383ebdb5aaba755712c3fcae."
+  },
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "NOT_REPRODUCED",
+  "verification": {
+    "method": "Clean-room review of the pinned official source only. The project deliberately rejects this API as outside product scope; this record does not claim hardware observation.",
+    "mock_exercised_at": null,
+    "hardware_observed_at": null
+  },
+  "licensing": {
+    "copied_material": false,
+    "note": "Numeric interface facts were read from a published pinned source and restated in original prose. No upstream code, comments, fixtures, tables, tests, or error strings were copied."
+  },
+  "notes": "Compatibility research only. Product support remains protocol 0 / API 1.46."
+}

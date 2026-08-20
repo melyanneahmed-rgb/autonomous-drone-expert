@@ -21,7 +21,7 @@ use ade_casebook::{
     reconcile_on_resume,
 };
 use ade_execution::{ExecError, Executor, WriteOperation};
-use ade_facts::{DeviceIdentity, IdentityMatch};
+use ade_facts::{ApiScopeStatus, DeviceIdentity, IdentityMatch, check_m1_api_scope};
 use ade_planning::{BeeperPlan, SystemInitBeeperGoal, VerificationRequirements, build_plan};
 use ade_protocol_msp::{BeeperConfigSnapshot, CommandId, SYSTEM_INIT_OFF_MASK};
 use ade_recovery::{RecoveryApprovals, RecoveryEvidence, RecoveryResult, run_restore};
@@ -294,15 +294,8 @@ pub const fn verification_state_label(target: ExecutionTarget) -> &'static str {
 #[must_use]
 pub fn check_scope(identity: &DeviceIdentity) -> ScopeStatus {
     let proposed = m1_proposed_target();
-    if identity.api.protocol_version != 0 {
-        return ScopeStatus::Mismatch {
-            field: "protocol_version",
-        };
-    }
-    if identity.api.api_major != 1 || identity.api.api_minor != 46 {
-        return ScopeStatus::Mismatch {
-            field: "msp_api_version",
-        };
+    if let ApiScopeStatus::Mismatch { field } = check_m1_api_scope(&identity.api) {
+        return ScopeStatus::Mismatch { field };
     }
     if &identity.variant.identifier != b"BTFL" {
         return ScopeStatus::Mismatch {

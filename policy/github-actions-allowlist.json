@@ -1,5 +1,5 @@
 {
-  "description": "Exact external GitHub Action references approved for canonical CI and owner-controlled delivery. Delivery remains immutable-SHA-only; the single canonical-CI tag is a temporary scoped exception.",
+  "description": "Exact external GitHub Action references approved for canonical CI and owner-controlled delivery, separated into direct workflow references and demonstrated transitive references. Delivery remains immutable-SHA-only; the single canonical-CI tag is a temporary scoped exception.",
   "canonical_ci_temporary_exceptions": [
     "actions/checkout@v7.0.1"
   ],
@@ -10,5 +10,8 @@
     "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9"
+  ],
+  "delivery_transitive_actions": [
+    "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f"
   ]
 }

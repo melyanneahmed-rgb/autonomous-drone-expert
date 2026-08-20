@@ -28,6 +28,14 @@ test("service worker is base-scoped, commit-versioned, GET-only, and update safe
   assert.match(register, /new MessageChannel\(\)/);
   assert.match(register, /CACHE_RESOURCES_COMPLETE/);
   assert.match(register, /window\.location\.origin/);
+  for (const asset of [
+    "wasm/ade_web_storage_wasm_bridge.js",
+    "wasm/ade_web_storage_wasm_bridge_bg.wasm",
+    "wasm/ade_web_readonly_serial_wasm_bridge.js",
+    "wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+  ]) {
+    assert.ok(register.includes(`"${asset}"`), `missing offline runtime asset: ${asset}`);
+  }
   assert.match(worker, /request\.method !== "GET"/);
   assert.match(worker, /new URL\("\.\/", self\.registration\.scope\)/);
   assert.match(worker, /EMBEDDED_BUILD_VERSION = "__ADE_SERVICE_WORKER_BUILD_SHA__"/);
@@ -39,6 +47,8 @@ test("service worker is base-scoped, commit-versioned, GET-only, and update safe
   for (const asset of ["manifest.webmanifest", "favicon.svg"]) {
     assert.ok(worker.includes(`"${asset}"`), `missing app-shell asset: ${asset}`);
   }
+  assert.doesNotMatch(worker, /["']\/(?:manifest\.webmanifest|favicon\.svg|wasm\/)/);
   assert.doesNotMatch(worker, /https?:\/\//i);
   assert.doesNotMatch(worker, /\b(indexedDB|ADEJ|journal|casebook)\b/i);
+  assert.doesNotMatch(worker, /serialNumber|getInfo|usbVendorId|usbProductId|deviceId/i);
 });

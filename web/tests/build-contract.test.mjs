@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
+const provenance = JSON.parse(
+  fs.readFileSync(path.join(webRoot, "..", "policy", "webserial-wasm-assets.json"), "utf8"),
+);
+const sha256 = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const expectedBuildSha = "1111111111111111111111111111111111111111";
+
 function filesBelow(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(directory, entry.name);
@@ -55,6 +61,39 @@ function buildAndInspect(basePath) {
     const worker = fs.readFileSync(path.join(dist, "sw.js"), "utf8");
     assert.ok(worker.includes(`const EMBEDDED_BUILD_VERSION = "${expectedBuildSha}";`));
     assert.doesNotMatch(worker, /__ADE_SERVICE_WORKER_BUILD_SHA__/);
+
+    const wasmFiles = relative.filter((file) => file.startsWith("wasm/"));
+    assert.deepEqual(wasmFiles.sort(), [
+      "wasm/ade_web_readonly_serial_wasm_bridge.js",
+      "wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm",
+    ]);
+    for (const output of provenance.outputs) {
+      const relativeOutput = output.path.replace("web/public/", "");
+      assert.equal(sha256(path.join(dist, relativeOutput)), output.sha256, relativeOutput);
+    }
+
+    const bundledJavaScript = files
+      .filter(
+        (file) =>
+          file.endsWith(".js") &&
+          path.relative(dist, file).replaceAll("\\", "/") !==
+            "wasm/ade_web_readonly_serial_wasm_bridge.js",
+      )
+      .map((file) => fs.readFileSync(file, "utf8"))
+      .join("\n");
+    const escapedBase = basePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.match(
+      bundledJavaScript,
+      new RegExp(`from["']${escapedBase}wasm/ade_web_readonly_serial_wasm_bridge\\.js["']`),
+      "production bundle must retain the base-scoped generated-module import",
+    );
+    if (basePath !== "/") {
+      assert.doesNotMatch(
+        bundledJavaScript,
+        /from["']\/wasm\/ade_web_readonly_serial_wasm_bridge\.js["']/,
+      );
+    }
+
     const text = files
       .filter((file) => !/\.(?:svg|ico|png|jpg|jpeg|gif)$/i.test(file))
       .map((file) => fs.readFileSync(file, "utf8"))

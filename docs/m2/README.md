@@ -1,11 +1,24 @@
 # M2 — Product Core and WebAssembly Boundary
 
-**Status:** in progress — Commit 1 boundary, no hardware contact
+**Status:** in progress — production WebApp read-only identity gate; physical attempt recorded,
+identity completion and hardware support not validated
 
 M2 turns the accepted M1 safety core into a product-level core that can be driven by a Web/PWA
-shell without moving protocol, write authority or recovery decisions into TypeScript. M2 is a
-core/UI architecture milestone. It does not open a serial port, identify a flight controller
-or write to hardware.
+shell without moving protocol, write authority or recovery decisions into TypeScript. The
+current production UI may explicitly select one Web Serial port and run a Rust-owned prefix of
+the fixed four-command read-only identity sequence. Unsupported valid APIs stop after the first
+read. It still cannot write to hardware.
+
+Current production connection details and the post-review Windows procedure are recorded in
+[`WEBAPP-READONLY-FC-CONNECTION.md`](WEBAPP-READONLY-FC-CONNECTION.md).
+
+The stacked temporary observability design is recorded in
+[`DIAGNOSTIC-TRACE-PANEL.md`](DIAGNOSTIC-TRACE-PANEL.md), with the independent
+[`WEB-SERIAL-SAFETY-REVIEW.md`](WEB-SERIAL-SAFETY-REVIEW.md) and the non-mutating
+[`PR18-MAIN-INTEGRATION-PLAN.md`](PR18-MAIN-INTEGRATION-PLAN.md). These documents preserve the
+exact evidence boundary: `PHYSICAL_FC_TEST_ATTEMPTED=YES`,
+`PHYSICAL_USB_SELECTION_OBSERVED=YES`, `READONLY_IDENTITY_COMPLETION=NO`, and
+`HARDWARE_SUPPORT_VALIDATED=NO`.
 
 ## Commit 1 — implemented boundary
 
@@ -75,5 +88,7 @@ does **not** claim that Web Serial, IndexedDB or a flight controller has been in
 4. Add UI interaction tests for the product input flow and manual control-assignment boundary.
 5. Complete workspace review and acceptance before M3 read-only Web Serial identification.
 
-Hardware reads begin only in M3. Hardware writes remain blocked until M4 and require a separate
-owner approval even if all M2 tests pass.
+The current M2 branch permits only the ordered prefix of four Rust-owned identity reads after an
+explicit owner gesture. Exact supported API uses all four; an unsupported valid API uses only the
+first. Hardware writes remain blocked until M4 and require a separate owner approval even if all
+M2 tests pass.

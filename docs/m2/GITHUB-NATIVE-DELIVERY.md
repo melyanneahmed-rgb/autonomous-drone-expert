@@ -61,11 +61,37 @@ The checkout has credential persistence disabled. The Web build job has `actions
 
 ## Selected GitHub Actions policy
 
-The repository permits only an explicit selected-action set. `policy/github-actions-allowlist.json` separates the six immutable full-SHA references required by the owner-controlled delivery workflows from one temporary, explicitly scoped canonical-CI exception: `actions/checkout@v7.0.1`.
+The repository permits only explicit selected actions. `policy/github-actions-allowlist.json` separates three scopes:
 
-Delivery contract tests require every Web Preview and Android `uses:` reference to be a full 40-character SHA, require the delivery set to contain no unused entry, and fail if the canonical-CI tag appears in either delivery workflow. The canonical CI workflow is likewise constrained to the single declared exception so the tag cannot silently spread.
+- `canonical_ci_temporary_exceptions`: the single temporary canonical-CI tag `actions/checkout@v7.0.1`;
+- `delivery_actions`: the six immutable full-SHA references written directly in the Web Preview and Android workflow files;
+- `delivery_transitive_actions`: immutable nested action references demonstrated from those pinned direct manifests.
 
-The repository Actions setting must eventually match this exact selected set. A mismatch fails at workflow startup before checkout, builds, artifact upload, or deployment; enabling all marketplace actions is neither required nor intended. Converting the canonical CI checkout tag to a reviewed immutable SHA remains a separate follow-up and is not part of this delivery correction.
+Delivery contract tests require the direct Web Preview and Android `uses:` set to match `delivery_actions` exactly, require every direct and transitive delivery reference to be a 40-character SHA, reject wildcards, and fail if the canonical-CI exception spreads into either delivery scope. The canonical CI workflow remains constrained to its single declared exception.
+
+### Demonstrated transitive selected-action enforcement
+
+[Web Preview run #2](https://github.com/melyanneahmed-rgb/autonomous-drone-expert/actions/runs/32070083242) failed during GitHub's `Set up job` step, before checkout, because the selected-actions policy did not yet include `actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f`.
+
+The pinned direct action `actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9` is a composite action. Its exact `action.yml` (blob `82713b4cbb35ccf98dfa8f2e0deedc5e83b6d845`) contains at line 84:
+
+`uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0`
+
+GitHub selected-actions enforcement therefore applies to the nested immutable action as well as the direct workflow reference. The nested ref is recorded separately; it does not replace the direct Android artifact action `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`.
+
+### Exact pinned-manifest audit
+
+| Selected delivery action | Manifest kind | Nested `uses:` audit |
+| --- | --- | --- |
+| `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` | Node 24 (`action.yml` blob `5b0524f730db83f9513c18ab31a6c086c7239076`) | none |
+| `actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d` | Node 24 (`action.yml` blob `7ea02ee862bd1315b0be31625082750aa52ff896`) | none |
+| `actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128` | Node 24 (`action.yml` blob `113b639c9d6a6a0ab2e5fa904ea6949968e78be2`) | none |
+| `actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961` | Node 24 (`action.yml` blob `396e53c708fa14eaf6f45eaa50e8ae499c1aa498`) | none |
+| `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | Node 24 (`action.yml` blob `7cb4d1e81db55320b41217e1a78a1a46e3d2baef`) | none |
+| `actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9` | composite (`action.yml` blob `82713b4cbb35ccf98dfa8f2e0deedc5e83b6d845`) | exactly `actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f` |
+| `actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f` | transitive Node 24 (`action.yml` blob `7cb4d1e81db55320b41217e1a78a1a46e3d2baef`) | none |
+
+No other nested `uses:` dependency appears in the exact pinned manifests, so no other action is added. The repository Actions setting remains owner-controlled and must be updated separately with this one exact transitive ref; enabling broad GitHub-created, verified-creator, Marketplace, or wildcard access is neither required nor intended.
 
 ## Pages availability and confidentiality boundary
 

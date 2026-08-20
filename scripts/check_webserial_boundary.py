@@ -8,9 +8,20 @@ import re
 import sys
 from pathlib import Path, PurePosixPath
 
+import verify_webserial_product_assets
+
 ROOT = Path(__file__).resolve().parent.parent
 ADAPTER = PurePosixPath("web/src/transport/webserial-readonly-host.mjs")
 DECLARATION = PurePosixPath("web/src/transport/webserial-readonly-host.d.mts")
+FACADE = PurePosixPath("web/src/connection/readonly-fc-connection.mjs")
+FACADE_DECLARATION = PurePosixPath("web/src/connection/readonly-fc-connection.d.mts")
+DIAGNOSTIC_TRACE = PurePosixPath("web/src/diagnostics/readonly-trace.mjs")
+DIAGNOSTIC_TRACE_DECLARATION = PurePosixPath("web/src/diagnostics/readonly-trace.d.mts")
+APP = PurePosixPath("web/src/App.tsx")
+DERIVED_ASSETS = {
+    PurePosixPath("web/public/wasm/ade_web_readonly_serial_wasm_bridge.js"),
+    PurePosixPath("web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm"),
+}
 SERIAL_BRIDGE = PurePosixPath("crates/web-readonly-serial-wasm-bridge/src/lib.rs")
 STORAGE_BRIDGE = PurePosixPath("crates/web-storage-wasm-bridge/src/lib.rs")
 EXPECTED_PACKAGE_LOCK_SHA256 = (
@@ -24,11 +35,10 @@ def product_sources(root: Path = ROOT) -> dict[PurePosixPath, str]:
         if not directory.is_dir():
             continue
         for path in sorted(candidate for candidate in directory.rglob("*") if candidate.is_file()):
-            if path.is_relative_to(root / "web" / "public" / "wasm"):
+            relative = PurePosixPath(path.relative_to(root).as_posix())
+            if relative in DERIVED_ASSETS:
                 continue
-            files[PurePosixPath(path.relative_to(root).as_posix())] = path.read_text(
-                encoding="utf-8"
-            )
+            files[relative] = path.read_text(encoding="utf-8")
     return files
 
 
@@ -40,6 +50,23 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
     declaration = files.get(DECLARATION)
     if declaration is None:
         errors.append(f"missing first-party Web Serial declaration: {DECLARATION}")
+    facade = files.get(FACADE)
+    facade_declaration = files.get(FACADE_DECLARATION)
+    diagnostic_trace = files.get(DIAGNOSTIC_TRACE)
+    diagnostic_declaration = files.get(DIAGNOSTIC_TRACE_DECLARATION)
+    app = files.get(APP)
+    if facade is None:
+        errors.append(f"missing product read-only connection facade: {FACADE}")
+    if facade_declaration is None:
+        errors.append(f"missing product read-only connection declaration: {FACADE_DECLARATION}")
+    if diagnostic_trace is None:
+        errors.append(f"missing privacy-bounded diagnostic trace: {DIAGNOSTIC_TRACE}")
+    if diagnostic_declaration is None:
+        errors.append(
+            f"missing privacy-bounded diagnostic trace declaration: {DIAGNOSTIC_TRACE_DECLARATION}"
+        )
+    if app is None:
+        errors.append(f"missing approved React product surface: {APP}")
 
     serial_patterns = {
         "navigator.serial": re.compile(r"(?:globalThis\.)?navigator\?*\.serial"),
@@ -61,6 +88,10 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
         "exchange-identification-read",
         "acceptReadChunk",
         "acceptExchangeFailure",
+        "failureStage: discovery.failureStage ?? undefined",
+        "failureReason: discovery.failureReason ?? undefined",
+        "failureOrigin:",
+        "takeTraceEvent",
         "releaseLock",
         "close",
     )
@@ -114,6 +145,88 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
             if re.search(pattern, declaration):
                 errors.append("declaration exposes caller-substitutable Rust trust authority")
 
+    if facade is not None:
+        required_facade = (
+            'import initReadonlySerialWasm from "virtual:ade-web-readonly-serial-wasm"',
+            'import { WebSerialReadonlyHost } from "../transport/webserial-readonly-host.mjs"',
+            "await initReadonlySerialWasm();",
+            "const selection = await this.#host.selectPortFromUserGesture()",
+            "await this.#host.discover()",
+            "result.hardwareObserved !== false",
+            "failureStage: result.failureStage",
+            "failureReason: result.failureReason",
+        )
+        for marker in required_facade:
+            if marker not in facade:
+                errors.append(f"product connection facade missing trusted behavior: {marker}")
+        if not re.search(r"async\s+discover\s*\(\s*\)", facade):
+            errors.append("product facade discover must accept zero arguments")
+        if re.search(r"export\s+class\s+PreparedReadonlyFcConnection", facade):
+            errors.append("prepared host implementation must not be caller-constructible")
+        if re.search(
+            r"(?:globalThis\.)?navigator\?*\.serial|\brequestPort\b|\b(?:getPorts|getInfo)\s*\(",
+            facade,
+        ):
+            errors.append("browser permission mechanics escaped from the accepted host")
+        if re.search(
+            r"\b(?:MSP_[A-Z0-9_]+|CommandId|WriteApproval|TransportEffect|OutboundPacket|"
+            r"sendRaw|writeRaw|commandId|payload)\b",
+            facade,
+            re.IGNORECASE,
+        ):
+            errors.append("product connection facade gained command/payload/write authority")
+        if re.search(r"\b(?:localStorage|sessionStorage|indexedDB)\b|document\.cookie", facade):
+            errors.append("product connection facade must not persist device identity")
+        if "/wasm/ade_web_readonly_serial_wasm_bridge" in facade:
+            errors.append("product connection facade contains a root-absolute WASM assumption")
+
+    if facade_declaration is not None:
+        if not re.search(r"\bdiscover\s*\(\s*\)\s*:", facade_declaration):
+            errors.append("product facade declaration must expose zero-argument discover()")
+        if re.search(r"\b(?:constructor|serial\?|host\?|bindings|factory|command|payload)\b", facade_declaration, re.IGNORECASE):
+            errors.append("product facade declaration exposes replaceable or selectable authority")
+
+    if diagnostic_trace is not None:
+        for marker in (
+            "DIAGNOSTIC_TRACE_CAPACITY = 200",
+            "capacity < 100 || capacity > 250",
+            "ALLOWED_KEYS",
+            "beginAttempt()",
+            "snapshot()",
+            "clear()",
+            "formatSafeDiagnosticTrace",
+        ):
+            if marker not in diagnostic_trace:
+                errors.append(f"diagnostic trace missing bounded behavior: {marker}")
+        forbidden_diagnostic = (
+            r"\b(?:console\.|localStorage|sessionStorage|indexedDB|document\.cookie)\b",
+            r"\b(?:fetch|XMLHttpRequest|WebSocket|sendBeacon)\s*\(?",
+            r"raw.?bytes|raw.?frame|raw.?payload|usbVendorId|usbProductId|serial.?number|port.?info",
+        )
+        for pattern in forbidden_diagnostic:
+            if re.search(pattern, diagnostic_trace, re.IGNORECASE):
+                errors.append("diagnostic trace gained a forbidden data field or outbound sink")
+
+    if app is not None:
+        if (
+            'from "./connection/readonly-fc-connection.mjs"' not in app
+            or "await prepared.selectPortFromUserGesture()" not in app
+            or "await prepared.discover()" not in app
+        ):
+            errors.append("React must call only the prepared narrow read-only facade")
+        forbidden_app = (
+            r"webserial-readonly-host|WasmReadonlySerial|(?:globalThis\.)?navigator\?*\.serial",
+            r"\b(?:requestPort|getPorts|getInfo)\s*\(",
+            r"\b(?:MSP_[A-Z0-9_]+|CommandId|WriteApproval|TransportEffect|SerialPort|"
+            r"sendRaw|writeRaw|commandId|payload)\b",
+            r"\b(?:localStorage|sessionStorage|indexedDB)\b|document\.cookie",
+            r"serial.?number|usbVendorId|usbProductId|deviceId|raw.?frame|raw.?payload|"
+            r"board.?signature|\bUID\b|hardwareObserved",
+        )
+        for pattern in forbidden_app:
+            if re.search(pattern, app, re.IGNORECASE):
+                errors.append("React gained serial authority or privacy-sensitive device data")
+
     forbidden_adapter = (
         (r"\bgetPorts\s*\(", "automatic/granted port enumeration"),
         (r"\b(sendRaw|writeRaw|sendMsp|writeCommand|executeArbitraryBytes)\b", "raw API"),
@@ -148,6 +261,17 @@ def source_authority_errors(files: dict[PurePosixPath, str]) -> list[str]:
 
 def repository_errors(root: Path = ROOT) -> list[str]:
     errors = source_authority_errors(product_sources(root))
+    adapter_path = root / ADAPTER
+    declaration_path = root / DECLARATION
+    if adapter_path.is_file() and hashlib.sha256(adapter_path.read_bytes()).hexdigest() != (
+        "cd8149b04cb2d2606243ccb86fe803229f13f99ce4e4e41d795d084617f953ff"
+    ):
+        errors.append("accepted production Web Serial host source drifted")
+    if declaration_path.is_file() and hashlib.sha256(declaration_path.read_bytes()).hexdigest() != (
+        "5dae945ba11d9401872bf28aa5f4d10ee2912916503839ea1b336f692da5ff89"
+    ):
+        errors.append("accepted production Web Serial host declaration drifted")
+    errors.extend(verify_webserial_product_assets.verify(root=root))
     for relative in (SERIAL_BRIDGE, STORAGE_BRIDGE):
         if not (root / relative).is_file():
             errors.append(f"missing bridge source: {relative}")
@@ -160,6 +284,8 @@ def repository_errors(root: Path = ROOT) -> list[str]:
             "MspV1ResponseAccumulator",
             "WriteCommandClass::NoWrite",
             "packet.approval().is_some()",
+            "TRACE_EVENT_LIMIT",
+            "take_trace_event",
         ):
             if marker not in serial_bridge:
                 errors.append(f"Rust serial authority proof missing: {marker}")
