@@ -361,10 +361,12 @@ mod tests {
         let frame = reply(CommandId::FcVersion, &[25, 12, 1]);
         assert_eq!(
             decode_fc_version(candidate(47), *b"BTFL", &frame),
-            Err(ReadonlyProfileDecodeError::Protocol(MspError::FieldOverrun {
-                field_len: 4,
-                remaining: 3,
-            }))
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::FieldOverrun {
+                    field_len: 4,
+                    remaining: 3,
+                }
+            ))
         );
     }
 
@@ -373,10 +375,12 @@ mod tests {
         let frame = reply(CommandId::FcVersion, &[25, 12, 1, 9, b'2']);
         assert_eq!(
             decode_fc_version(candidate(47), *b"BTFL", &frame),
-            Err(ReadonlyProfileDecodeError::Protocol(MspError::FieldOverrun {
-                field_len: 9,
-                remaining: 1,
-            }))
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::FieldOverrun {
+                    field_len: 9,
+                    remaining: 1,
+                }
+            ))
         );
     }
 
@@ -385,10 +389,12 @@ mod tests {
         let frame = reply(CommandId::FcVersion, &[25, 12, 1, 1, b'x', b'y']);
         assert_eq!(
             decode_fc_version(candidate(47), *b"BTFL", &frame),
-            Err(ReadonlyProfileDecodeError::Protocol(MspError::TrailingPayload {
-                consumed: 5,
-                total: 6,
-            }))
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::TrailingPayload {
+                    consumed: 5,
+                    total: 6,
+                }
+            ))
         );
     }
 
@@ -397,9 +403,11 @@ mod tests {
         let frame = reply(CommandId::FcVersion, &[25, 12, 1, 1, 0xff]);
         assert_eq!(
             decode_fc_version(candidate(47), *b"BTFL", &frame),
-            Err(ReadonlyProfileDecodeError::Protocol(MspError::InvalidUtf8 {
-                field: "fc_version_string",
-            }))
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::InvalidUtf8 {
+                    field: "fc_version_string",
+                }
+            ))
         );
     }
 
@@ -408,7 +416,9 @@ mod tests {
         let wrong_command = reply(CommandId::ApiVersion, &[0, 1, 47]);
         assert!(matches!(
             decode_fc_version(candidate(47), *b"BTFL", &wrong_command),
-            Err(ReadonlyProfileDecodeError::Protocol(MspError::WrongCommand { .. }))
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::WrongCommand { .. }
+            ))
         ));
 
         let bytes = encode_frame(Direction::Request, CommandId::FcVersion, &[])
@@ -416,7 +426,9 @@ mod tests {
         let request = decode_frame(&bytes).expect("request fixture must decode");
         assert_eq!(
             decode_fc_version(candidate(47), *b"BTFL", &request),
-            Err(ReadonlyProfileDecodeError::Protocol(MspError::WrongDirection))
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::WrongDirection
+            ))
         );
     }
 
