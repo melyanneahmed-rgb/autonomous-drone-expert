@@ -4,8 +4,10 @@
 //!
 //! M3 needs to learn how to *read* more than the exact M1 write target without silently making
 //! those versions eligible for configuration changes. This crate makes that distinction a type
-//! boundary. It describes only the already-proven read-only identity command sequence layouts;
-//! it owns no command ids, frame bytes, transport, device handle, write approval or recovery path.
+//! boundary. It describes only reviewed read-only identity layouts and their strict decoders;
+//! it owns no transport, device handle, write approval or recovery path.
+
+use ade_protocol_msp::{CommandId, Direction, FcVersion, Frame, MspError};
 
 /// Stable identifier for a reviewed read-only identity layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,8 +57,8 @@ pub enum ReadProfileWriteAuthority {
 
 /// Candidate selected from the structurally valid `MSP_API_VERSION` tuple.
 ///
-/// The firmware variant has not been accepted yet, so callers must apply [`accept_variant`]
-/// before treating the candidate as a selected profile.
+/// The firmware variant has not been accepted yet. Profile-specific decoding must still pass the
+/// exact variant gate first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadonlyProfileCandidate {
     /// Stable profile identifier.
@@ -86,6 +88,35 @@ pub enum ReadonlyApiProfileStatus {
     UnsupportedProtocol,
     /// The protocol is known but this API version has no reviewed read-only profile.
     UnsupportedApi,
+}
+
+/// Typed firmware-version result from one reviewed read-only profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadonlyFcVersion {
+    /// API 1.46 legacy three-byte semantic version.
+    Legacy(FcVersion),
+    /// API 1.47 calendar triplet plus the strict length-prefixed version string.
+    CalendarExtended {
+        /// The three raw calendar-version bytes as published by MSP.
+        calendar_version: [u8; 3],
+        /// Strict UTF-8 version string from the same reply.
+        version_string: String,
+    },
+}
+
+/// Failure from profile-gated read-only identity decoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadonlyProfileDecodeError {
+    /// The four-byte firmware variant did not match the reviewed profile.
+    VariantMismatch,
+    /// The MSP frame or profile-specific payload was structurally invalid.
+    Protocol(MspError),
+}
+
+impl From<MspError> for ReadonlyProfileDecodeError {
+    fn from(value: MspError) -> Self {
+        Self::Protocol(value)
+    }
 }
 
 const BETAFLIGHT_VARIANT: [u8; 4] = *b"BTFL";
@@ -140,28 +171,111 @@ pub fn accept_variant(candidate: ReadonlyProfileCandidate, observed: [u8; 4]) ->
     }
 }
 
+/// Decode `MSP_FC_VERSION` for one reviewed candidate, after enforcing its exact firmware variant.
+///
+/// The variant gate is checked before the frame is interpreted, so a candidate cannot use a
+/// profile-specific decoder until the observed firmware family is exactly the reviewed one.
+/// This function never changes or consults hardware-write eligibility.
+///
+/// # Errors
+/// Returns [`ReadonlyProfileDecodeError::VariantMismatch`] before parsing if the observed variant
+/// is not accepted. Otherwise returns a bounded structural [`MspError`] for wrong command,
+/// direction, length prefix, trailing bytes or invalid UTF-8.
+pub fn decode_fc_version(
+    candidate: ReadonlyProfileCandidate,
+    observed_variant: [u8; 4],
+    frame: &Frame,
+) -> Result<ReadonlyFcVersion, ReadonlyProfileDecodeError> {
+    if !accept_variant(candidate, observed_variant) {
+        return Err(ReadonlyProfileDecodeError::VariantMismatch);
+    }
+
+    match candidate.fc_version_layout {
+        FcVersionLayout::LegacyThreeByte => {
+            Ok(ReadonlyFcVersion::Legacy(FcVersion::from_reply(frame)?))
+        }
+        FcVersionLayout::CalendarTripletWithVersionString => {
+            if frame.command != CommandId::FcVersion.as_u8() {
+                return Err(MspError::WrongCommand {
+                    expected: CommandId::FcVersion.as_u8(),
+                    found: frame.command,
+                }
+                .into());
+            }
+            if !matches!(frame.direction, Direction::Reply) {
+                return Err(MspError::WrongDirection.into());
+            }
+
+            let payload = frame.payload();
+            if payload.len() < 4 {
+                return Err(MspError::FieldOverrun {
+                    field_len: 4,
+                    remaining: payload.len(),
+                }
+                .into());
+            }
+
+            let version_len = payload[3] as usize;
+            let remaining = payload.len() - 4;
+            if remaining < version_len {
+                return Err(MspError::FieldOverrun {
+                    field_len: version_len,
+                    remaining,
+                }
+                .into());
+            }
+            if remaining > version_len {
+                return Err(MspError::TrailingPayload {
+                    consumed: 4 + version_len,
+                    total: payload.len(),
+                }
+                .into());
+            }
+
+            let version_string = std::str::from_utf8(&payload[4..])
+                .map_err(|_| MspError::InvalidUtf8 {
+                    field: "fc_version_string",
+                })?
+                .to_owned();
+
+            Ok(ReadonlyFcVersion::CalendarExtended {
+                calendar_version: [payload[0], payload[1], payload[2]],
+                version_string,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ade_facts::{ApiScopeStatus, check_m1_api_scope};
-    use ade_protocol_msp::ApiVersion;
+    use ade_protocol_msp::{ApiVersion, decode_frame, encode_frame};
+
+    fn reply(command: CommandId, payload: &[u8]) -> Frame {
+        let bytes = encode_frame(Direction::Reply, command, payload).expect("fixture must encode");
+        decode_frame(&bytes).expect("fixture must decode")
+    }
+
+    fn candidate(api_minor: u8) -> ReadonlyProfileCandidate {
+        let ReadonlyApiProfileStatus::Candidate(candidate) =
+            classify_readonly_api_profile(0, 1, api_minor)
+        else {
+            panic!("reviewed API must have a candidate");
+        };
+        candidate
+    }
 
     #[test]
     fn api_146_and_147_have_distinct_reviewed_read_candidates() {
-        let ReadonlyApiProfileStatus::Candidate(api_146) = classify_readonly_api_profile(0, 1, 46)
-        else {
-            panic!("API 1.46 must have a reviewed read candidate");
-        };
+        let api_146 = candidate(46);
         assert_eq!(
             api_146.id,
             ReadonlyIdentityProfileId::BetaflightApi146Legacy
         );
         assert_eq!(api_146.fc_version_layout, FcVersionLayout::LegacyThreeByte);
 
-        let ReadonlyApiProfileStatus::Candidate(api_147) = classify_readonly_api_profile(0, 1, 47)
-        else {
-            panic!("API 1.47 must have a reviewed read candidate");
-        };
+        let api_147 = candidate(47);
         assert_eq!(
             api_147.id,
             ReadonlyIdentityProfileId::BetaflightApi147CalendarExtended
@@ -175,13 +289,8 @@ mod tests {
     #[test]
     fn every_reviewed_read_candidate_is_structurally_write_blocked() {
         for api_minor in [46, 47] {
-            let ReadonlyApiProfileStatus::Candidate(candidate) =
-                classify_readonly_api_profile(0, 1, api_minor)
-            else {
-                panic!("reviewed API must have a candidate");
-            };
             assert_eq!(
-                candidate.write_authority,
+                candidate(api_minor).write_authority,
                 ReadProfileWriteAuthority::NeverAuthorizesWrites
             );
         }
@@ -189,11 +298,7 @@ mod tests {
 
     #[test]
     fn candidate_requires_exact_betaflight_variant() {
-        let ReadonlyApiProfileStatus::Candidate(candidate) =
-            classify_readonly_api_profile(0, 1, 47)
-        else {
-            panic!("API 1.47 must have a candidate");
-        };
+        let candidate = candidate(47);
         assert!(accept_variant(candidate, *b"BTFL"));
         assert!(!accept_variant(candidate, *b"INAV"));
         assert!(!accept_variant(candidate, *b"TEST"));
@@ -212,6 +317,118 @@ mod tests {
         assert_eq!(
             classify_readonly_api_profile(0, 1, 48),
             ReadonlyApiProfileStatus::UnsupportedApi
+        );
+    }
+
+    #[test]
+    fn api_146_decoder_preserves_the_existing_strict_three_byte_path() {
+        let frame = reply(CommandId::FcVersion, &[4, 5, 5]);
+        assert_eq!(
+            decode_fc_version(candidate(46), *b"BTFL", &frame),
+            Ok(ReadonlyFcVersion::Legacy(FcVersion {
+                major: 4,
+                minor: 5,
+                patch: 5,
+            }))
+        );
+    }
+
+    #[test]
+    fn api_147_decoder_accepts_the_pinned_calendar_extended_shape() {
+        let mut payload = vec![25, 12, 1, 9];
+        payload.extend_from_slice(b"2025.12.1");
+        let frame = reply(CommandId::FcVersion, &payload);
+        assert_eq!(
+            decode_fc_version(candidate(47), *b"BTFL", &frame),
+            Ok(ReadonlyFcVersion::CalendarExtended {
+                calendar_version: [25, 12, 1],
+                version_string: "2025.12.1".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn variant_gate_runs_before_profile_specific_payload_parsing() {
+        let wrong_command = reply(CommandId::ApiVersion, &[]);
+        assert_eq!(
+            decode_fc_version(candidate(47), *b"INAV", &wrong_command),
+            Err(ReadonlyProfileDecodeError::VariantMismatch)
+        );
+    }
+
+    #[test]
+    fn api_147_decoder_rejects_missing_length_prefix() {
+        let frame = reply(CommandId::FcVersion, &[25, 12, 1]);
+        assert_eq!(
+            decode_fc_version(candidate(47), *b"BTFL", &frame),
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::FieldOverrun {
+                    field_len: 4,
+                    remaining: 3,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn api_147_decoder_rejects_declared_string_overrun() {
+        let frame = reply(CommandId::FcVersion, &[25, 12, 1, 9, b'2']);
+        assert_eq!(
+            decode_fc_version(candidate(47), *b"BTFL", &frame),
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::FieldOverrun {
+                    field_len: 9,
+                    remaining: 1,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn api_147_decoder_rejects_undocumented_trailing_payload() {
+        let frame = reply(CommandId::FcVersion, &[25, 12, 1, 1, b'x', b'y']);
+        assert_eq!(
+            decode_fc_version(candidate(47), *b"BTFL", &frame),
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::TrailingPayload {
+                    consumed: 5,
+                    total: 6,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn api_147_decoder_rejects_invalid_utf8_without_echoing_bytes() {
+        let frame = reply(CommandId::FcVersion, &[25, 12, 1, 1, 0xff]);
+        assert_eq!(
+            decode_fc_version(candidate(47), *b"BTFL", &frame),
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::InvalidUtf8 {
+                    field: "fc_version_string",
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn api_147_decoder_rejects_wrong_command_and_direction_after_variant_acceptance() {
+        let wrong_command = reply(CommandId::ApiVersion, &[0, 1, 47]);
+        assert!(matches!(
+            decode_fc_version(candidate(47), *b"BTFL", &wrong_command),
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::WrongCommand { .. }
+            ))
+        ));
+
+        let bytes = encode_frame(Direction::Request, CommandId::FcVersion, &[])
+            .expect("request fixture must encode");
+        let request = decode_frame(&bytes).expect("request fixture must decode");
+        assert_eq!(
+            decode_fc_version(candidate(47), *b"BTFL", &request),
+            Err(ReadonlyProfileDecodeError::Protocol(
+                MspError::WrongDirection
+            ))
         );
     }
 
