@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[dependencies]
+ade-protocol-msp = { path = "../protocol-msp" }
+
 [dev-dependencies]
 ade-facts = { path = "../facts" }
-ade-protocol-msp = { path = "../protocol-msp" }
