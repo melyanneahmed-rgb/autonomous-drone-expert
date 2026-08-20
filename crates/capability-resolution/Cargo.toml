@@ -1,0 +1,15 @@
+[package]
+name = "ade-capability-resolution"
+description = "Privacy-bounded adapter from authoritative device identity facts to descriptive capability-pack resolution."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# First-party workspace path dependencies only (ADR-0009).
+[dependencies]
+ade-facts = { path = "../facts" }
+ade-capability = { path = "../capability" }
+
+[dev-dependencies]
+ade-protocol-msp = { path = "../protocol-msp" }

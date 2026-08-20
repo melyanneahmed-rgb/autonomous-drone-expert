@@ -17,6 +17,15 @@ name = "ade-capability"
 version = "0.0.0"
 
 [[package]]
+name = "ade-capability-resolution"
+version = "0.0.0"
+dependencies = [
+ "ade-capability",
+ "ade-facts",
+ "ade-protocol-msp",
+]
+
+[[package]]
 name = "ade-casebook"
 version = "0.0.0"
 dependencies = [
