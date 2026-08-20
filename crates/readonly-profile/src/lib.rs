@@ -88,7 +88,7 @@ pub enum ReadonlyApiProfileStatus {
     UnsupportedApi,
 }
 
-const BETAFIGHT_VARIANT: [u8; 4] = *b"BTFL";
+const BETAFLIGHT_VARIANT: [u8; 4] = *b"BTFL";
 
 /// Select a reviewed *read-only* identity profile candidate from an API tuple.
 ///
@@ -111,7 +111,7 @@ pub const fn classify_readonly_api_profile(
             protocol_version: 0,
             api_major: 1,
             api_minor: 46,
-            variant_gate: VariantGate::Exact(BETAFIGHT_VARIANT),
+            variant_gate: VariantGate::Exact(BETAFLIGHT_VARIANT),
             fc_version_layout: FcVersionLayout::LegacyThreeByte,
             board_info_layout: BoardInfoLayout::Api146To147Complete,
             write_authority: ReadProfileWriteAuthority::NeverAuthorizesWrites,
@@ -121,7 +121,7 @@ pub const fn classify_readonly_api_profile(
             protocol_version: 0,
             api_major: 1,
             api_minor: 47,
-            variant_gate: VariantGate::Exact(BETAFIGHT_VARIANT),
+            variant_gate: VariantGate::Exact(BETAFLIGHT_VARIANT),
             fc_version_layout: FcVersionLayout::CalendarTripletWithVersionString,
             board_info_layout: BoardInfoLayout::Api146To147Complete,
             write_authority: ReadProfileWriteAuthority::NeverAuthorizesWrites,
