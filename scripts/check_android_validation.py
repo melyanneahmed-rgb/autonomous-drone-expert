@@ -53,15 +53,35 @@ def main() -> int:
 
     verification = ET.parse(verification_path)
     namespace = {"v": "https://schema.gradle.org/dependency-verification"}
+    component_items = verification.findall("./v:components/v:component", namespace)
     components = {
         f'{item.attrib["group"]}:{item.attrib["name"]}:{item.attrib["version"]}'
-        for item in verification.findall("./v:components/v:component", namespace)
+        for item in component_items
     }
     missing_verification = sorted(expected_runtime - components)
     if missing_verification:
         fail(f"runtime components lack verification metadata: {missing_verification}")
     if not verification.findall(".//v:sha256", namespace):
         fail("verification metadata contains no SHA-256 records")
+
+    expected_linux_aapt2_sha256 = "755f6727fb3f4cce5e319eac0f3618ed4b36b49a46d4bb2cbb6fa8e9175a54d6"
+    linux_aapt2_found = False
+    for component in component_items:
+        if (
+            component.attrib.get("group") == "com.android.tools.build"
+            and component.attrib.get("name") == "aapt2"
+            and component.attrib.get("version") == "9.2.1-15009934"
+        ):
+            for artifact in component.findall("v:artifact", namespace):
+                if artifact.attrib.get("name") != "aapt2-9.2.1-15009934-linux.jar":
+                    continue
+                linux_aapt2_found = True
+                digest = artifact.find("v:sha256", namespace)
+                if digest is None or digest.attrib.get("value") != expected_linux_aapt2_sha256:
+                    fail("Linux aapt2 SHA-256 verification drift")
+    if not linux_aapt2_found:
+        fail("Linux aapt2 verification metadata is missing")
+
     locked_components = {
         line.split("=", 1)[0]
         for line in lock_path.read_text(encoding="utf-8").splitlines()
