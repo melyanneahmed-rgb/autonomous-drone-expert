@@ -1,6 +1,6 @@
 # M3 — Read-only capability-pack resolution
 
-**Status:** slices 1–2 implemented for review
+**Status:** slices 1–2 merged; next-profile provenance review in progress
 
 M3 begins the firmware capability-pack layer accepted by ADR-0007. This milestone does not add a
 hardware write, a driver, a transport, a command table or a signed-pack distribution system.
@@ -64,11 +64,34 @@ The adapter:
 This creates no path from a capability match to `WriteApproval`, transport exchange or a hardware
 command.
 
+## Pinned research for the next read-only profile
+
+Before any decoder or identification-sequence change, M3 is completing the clean-room provenance
+set for Betaflight `2025.12.1` at MSP protocol `0` / API `1.47`, resolved to official upstream
+commit `85d201376a1fc33b223c27448808c2cc7b8f2743`.
+
+The repository already records:
+
+- `MSP_API_VERSION`: three bytes and the pinned protocol/API tuple;
+- `MSP_FC_VERSION`: the 2025 calendar-version triplet followed by a one-byte length and the
+  version-string bytes.
+
+The current provenance review adds:
+
+- `MSP_FC_VARIANT`: fixed four-byte `BTFL` identifier;
+- `MSP_BOARD_INFO`: the complete documented variable-length field sequence through the API 1.47
+  tail, including explicit pstring bounds and the 32-byte signature that must remain excluded
+  from stable identity/persistence.
+
+These are `PINNED_SOURCE_RECORDED / NOT_REPRODUCED` research facts only. They do not mean the
+product parses API 1.47, they do not identify the owner's hardware, and they do not broaden the
+M1 write scope.
+
 ## Safety properties
 
 The current M3 slices cannot represent or perform:
 
-- MSP/CLI command ids or arbitrary payloads;
+- MSP/CLI command ids or arbitrary payloads as capability-pack actions;
 - a transport or device handle;
 - a write approval;
 - SET/SAVE/EEPROM/reboot/motor/arm/DFU/flashing authority;
@@ -92,8 +115,8 @@ remain part of the later Knowledge Platform milestone.
 
 1. Separate **readable identity profiles** from the still-exact M1 write scope so adding a known
    read-only firmware/API profile can never silently broaden write eligibility.
-2. Review pinned official provenance for the next read-only identity profile before changing any
-   decoder or command sequence.
+2. After the provenance records are accepted, implement the next read-only decoder/profile behind
+   that separation with adversarial parser tests and no write-scope change.
 3. Add capability-pack selection evidence to the Web diagnostic/result model without exposing
    firmware-engine details in the ordinary product UI.
 4. Keep all real writes blocked until the later write milestone and a separate owner approval.

@@ -1,0 +1,39 @@
+{
+  "record_id": "bf-2025.12.1-msp-board-info",
+  "kind": "payload_layout",
+  "name": "MSP_BOARD_INFO",
+  "value": 4,
+  "firmware": {
+    "family": "Betaflight",
+    "version": "2025.12.1",
+    "msp_api_version": "1.47"
+  },
+  "source": {
+    "type": "upstream_firmware_source_read",
+    "repository": "betaflight/betaflight",
+    "ref_kind": "tag",
+    "ref": "2025.12.1",
+    "path": "src/main/msp/msp.c",
+    "url": "https://raw.githubusercontent.com/betaflight/betaflight/2025.12.1/src/main/msp/msp.c",
+    "retrieved_at": "2026-08-20",
+    "retrieved_by": "m3-readonly-profile-provenance",
+    "resolved_commit": "85d201376a1fc33b223c27448808c2cc7b8f2743"
+  },
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": null,
+    "note": "Variable-length read-only reply. The pinned source writes, in order: board_identifier[4]; hardware_revision u16 little-endian; fc_type u8; target_capabilities u8; target_name with a one-byte length followed by that many bytes; board_name with the same one-byte-length framing; manufacturer_id with the same framing; signature[32]; mcu_type_id u8; configuration_state u8; gyro_sample_rate_hz u16 little-endian; configuration_problems u32 little-endian; spi_device_count u8; i2c_device_count u8. BOARD_IDENTIFIER_LENGTH is 4 in msp_protocol.h and SIGNATURE_LENGTH is 32 in pg/board.h. A future parser must bounds-check every length-prefixed string, consume the complete documented payload and keep the per-unit signature out of stable identity and persistence."
+  },
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "NOT_REPRODUCED",
+  "verification": {
+    "method": "Clean-room review of the pinned official Betaflight source only. The current product does not parse this record as an API 1.47 profile and this record does not claim mock or hardware observation.",
+    "mock_exercised_at": null,
+    "hardware_observed_at": null
+  },
+  "licensing": {
+    "copied_material": false,
+    "note": "Only interface field order, sizes and framing facts were read from pinned published source and restated in original prose. No upstream code, comments, fixtures, tables, tests or error strings were copied."
+  },
+  "notes": "M3 compatibility research only. This record completes pinned source coverage for the four read-only identity replies at Betaflight 2025.12.1 / MSP API 1.47 when combined with the existing API_VERSION and FC_VERSION records. It does not expand product support or write eligibility."
+}

@@ -1,0 +1,39 @@
+{
+  "record_id": "bf-2025.12.1-msp-fc-variant",
+  "kind": "payload_layout",
+  "name": "MSP_FC_VARIANT",
+  "value": 2,
+  "firmware": {
+    "family": "Betaflight",
+    "version": "2025.12.1",
+    "msp_api_version": "1.47"
+  },
+  "source": {
+    "type": "upstream_firmware_source_read",
+    "repository": "betaflight/betaflight",
+    "ref_kind": "tag",
+    "ref": "2025.12.1",
+    "path": "src/main/msp/msp.c",
+    "url": "https://raw.githubusercontent.com/betaflight/betaflight/2025.12.1/src/main/msp/msp.c",
+    "retrieved_at": "2026-08-20",
+    "retrieved_by": "m3-readonly-profile-provenance",
+    "resolved_commit": "85d201376a1fc33b223c27448808c2cc7b8f2743"
+  },
+  "payload_layout": {
+    "fields": null,
+    "length_bytes": 4,
+    "note": "Read-only reply is exactly one four-byte flight-controller-identifier field. At the pinned tag FLIGHT_CONTROLLER_IDENTIFIER_LENGTH is 4 and FC_FIRMWARE_IDENTIFIER is BTFL."
+  },
+  "source_state": "PINNED_SOURCE_RECORDED",
+  "verification_state": "NOT_REPRODUCED",
+  "verification": {
+    "method": "Clean-room review of the pinned official Betaflight source only. This record documents a compatibility fact and does not enable the API 1.47 product path or claim hardware observation.",
+    "mock_exercised_at": null,
+    "hardware_observed_at": null
+  },
+  "licensing": {
+    "copied_material": false,
+    "note": "The numeric command id, fixed length and four-character interface identifier were read from pinned published source and restated in original prose. No upstream code, comments, fixtures, tables, tests or error strings were copied."
+  },
+  "notes": "M3 compatibility research only. Product write scope remains Betaflight 4.5.5 / MSP protocol 0 / API 1.46."
+}
