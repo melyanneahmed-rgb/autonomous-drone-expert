@@ -1,6 +1,6 @@
 # M3 — Read-only capability-pack resolution
 
-**Status:** slices 1–3 merged; read-profile/write-scope separation in progress
+**Status:** slices 1–4 merged; strict API 1.47 read-only decoder in review
 
 M3 begins the firmware capability-pack layer accepted by ADR-0007. This milestone does not add a
 hardware write, a driver, a transport, a command table or a signed-pack distribution system.
@@ -81,16 +81,15 @@ The repository records:
   identity/persistence.
 
 These are `PINNED_SOURCE_RECORDED / NOT_REPRODUCED` research facts only. They do not mean the
-product parses API 1.47, they do not identify the owner's hardware, and they do not broaden the
-M1 write scope.
+product identifies the owner's hardware as API 1.47 or Betaflight 2025.12.1, and they do not
+broaden the M1 write scope.
 
 ## Slice 4 — readable profile versus write eligibility
 
-`ade-readonly-profile` creates an explicit type boundary before API 1.47 parsing is enabled.
-The crate has no production dependency at all and owns no protocol command id, raw frame, device
-handle, transport or write approval.
+`ade-readonly-profile` creates an explicit type boundary before API 1.47 production identification
+is enabled.
 
-It currently describes two exact read-layout candidates:
+It describes two exact read-layout candidates:
 
 - protocol 0 / API 1.46: legacy three-byte `FC_VERSION`;
 - protocol 0 / API 1.47: calendar triplet plus one-byte-length version string.
@@ -103,11 +102,34 @@ A cross-crate regression test intentionally proves the separation: API 1.47 can 
 read-profile registry while `ade-facts::check_m1_api_scope` still rejects API 1.47 for the M1 write
 scope. Future read support must not alter that fact accidentally.
 
+## Slice 5 — strict profile-gated `FC_VERSION` decoder
+
+The read-profile crate now depends only on the existing first-party MSP codec in production and
+adds a decoder that cannot run a profile-specific layout before the exact firmware-variant gate
+passes.
+
+For API 1.46 it delegates to the existing strict three-byte `FcVersion` decoder unchanged.
+For API 1.47 it accepts only:
+
+1. the three published calendar-version bytes;
+2. one `u8` version-string length;
+3. exactly that many strict UTF-8 bytes;
+4. no undocumented trailing payload.
+
+The API 1.47 result keeps the raw calendar triplet and the strict version string separately; it
+does not reinterpret the triplet into a semantic version or infer the owner's physical firmware.
+Malformed prefixes, declared-length overruns, trailing bytes, invalid UTF-8, wrong command and
+wrong direction all fail closed with bounded structural errors. An adversarial test also proves
+that a non-`BTFL` variant is rejected before payload parsing starts.
+
+This slice still does not change the Rust-owned production identification state machine, so it does
+not yet turn the owner's previous `api-unsupported` observation into a completed identity.
+
 ## Safety properties
 
 The current M3 slices cannot represent or perform:
 
-- MSP/CLI command ids or arbitrary payloads as capability-pack or read-profile actions;
+- arbitrary MSP/CLI commands or arbitrary payload actions;
 - a transport or device handle;
 - a write approval;
 - SET/SAVE/EEPROM/reboot/motor/arm/DFU/flashing authority;
@@ -129,10 +151,11 @@ remain part of the later Knowledge Platform milestone.
 
 ## Next M3 work
 
-1. After the read-profile separation is accepted, implement the API 1.47 read-only decoder/profile
-   with adversarial parser tests and no M1 write-scope change.
-2. Integrate that profile into the Rust-owned identification state machine so the variant gate is
-   checked before the profile-specific firmware-version decoder runs.
+1. Integrate the reviewed API 1.47 read profile into the Rust-owned identification state machine so
+   `MSP_API_VERSION` selects a read candidate, `MSP_FC_VARIANT` gates it, and only then the
+   profile-specific `MSP_FC_VERSION` decoder runs.
+2. Preserve the exact M1 write-scope check independently: API 1.47 must remain write-ineligible even
+   if read-only identity becomes complete.
 3. Add capability/profile selection evidence to the bounded Web diagnostic/result model without
    exposing firmware-engine details in the ordinary product UI.
 4. Keep all real writes blocked until the later write milestone and a separate owner approval.
