@@ -1,23 +1,22 @@
 name: TEMP M3 API147 Integrator — NEVER MERGE
 
 on:
-  push:
-    branches:
-      - feat/m3-api147-readonly-identification
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   integrate:
-    name: One-shot source integration and canonical WASM regeneration
+    if: github.head_ref == 'feat/m3-api147-readonly-identification'
+    name: Generate reviewed API147 integration artifact
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout exact integration branch
+      - name: Checkout PR merge candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: feat/m3-api147-readonly-identification
-          persist-credentials: true
+          persist-credentials: false
           fetch-depth: 2
 
       - name: Assert temporary inputs
@@ -26,7 +25,6 @@ jobs:
           set -euo pipefail
           test -f scripts/tmp_m3_api147_integrate.py
           test -f .github/workflows/tmp-m3-api147-integrator.yml
-          test "$(git rev-parse HEAD)" = "f77ffefda13f5649e04c630366b0fdbe39f97a77"
 
       - name: Apply fail-closed source integration
         run: python3 scripts/tmp_m3_api147_integrate.py
@@ -44,23 +42,22 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          before = subprocess.check_output(
-              ["git", "show", "HEAD:Cargo.lock"], text=True
-          )
+          before = subprocess.check_output(["git", "show", "HEAD:Cargo.lock"], text=True)
           after = Path("Cargo.lock").read_text(encoding="utf-8")
 
-          def registry_records(text: str):
+          def registry_records(text):
               records = []
               for block in text.split("[[package]]")[1:]:
-                  if 'source = "registry+' in block:
-                      name = re.search(r'^name = "([^"]+)"', block, re.M)
-                      version = re.search(r'^version = "([^"]+)"', block, re.M)
-                      checksum = re.search(r'^checksum = "([^"]+)"', block, re.M)
-                      records.append((
-                          name.group(1) if name else None,
-                          version.group(1) if version else None,
-                          checksum.group(1) if checksum else None,
-                      ))
+                  if 'source = "registry+' not in block:
+                      continue
+                  name = re.search(r'^name = "([^"]+)"', block, re.M)
+                  version = re.search(r'^version = "([^"]+)"', block, re.M)
+                  checksum = re.search(r'^checksum = "([^"]+)"', block, re.M)
+                  records.append((
+                      name.group(1) if name else None,
+                      version.group(1) if version else None,
+                      checksum.group(1) if checksum else None,
+                  ))
               return records
 
           if registry_records(before) != registry_records(after):
@@ -110,10 +107,10 @@ jobs:
           manifest_path = root / 'policy/webserial-wasm-assets.json'
           manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
 
-          def sha256(path: Path) -> str:
+          def sha256(path):
               return hashlib.sha256(path.read_bytes()).hexdigest()
 
-          def blob_sha1(path: Path) -> str:
+          def blob_sha1(path):
               content = path.read_bytes()
               return hashlib.sha1(
                   f"blob {len(content)}\0".encode() + content,
@@ -124,12 +121,10 @@ jobs:
           source_path = root / source_record['path']
           source_record['sha256'] = sha256(source_path)
           source_record['git_blob_sha1'] = blob_sha1(source_path)
-
           for record in manifest['outputs']:
               path = root / record['path']
               record['sha256'] = sha256(path)
               record['size'] = path.stat().st_size
-
           manifest_path.write_text(
               json.dumps(manifest, indent=2, ensure_ascii=False) + '\n',
               encoding='utf-8',
@@ -156,7 +151,7 @@ jobs:
           python3 scripts/check_unsafe.py
           python3 scripts/check_provenance.py
 
-      - name: Web source and build validation
+      - name: Web source validation
         working-directory: web
         shell: bash
         run: |
@@ -165,26 +160,53 @@ jobs:
           npx --yes npm@11.13.0 run typecheck
           npx --yes npm@11.13.0 test
 
-      - name: Final diff and temporary-file deletion
+      - name: Package only intended final result
         shell: bash
         run: |
           set -euo pipefail
           git diff --check
-          rm scripts/tmp_m3_api147_integrate.py
-          rm .github/workflows/tmp-m3-api147-integrator.yml
-          test ! -e scripts/tmp_m3_api147_integrate.py
-          test ! -e .github/workflows/tmp-m3-api147-integrator.yml
-          git diff --check
+          mkdir -p "$RUNNER_TEMP/m3-result"
+          paths=(
+            Cargo.lock
+            crates/execution/Cargo.toml
+            crates/execution/src/lib.rs
+            crates/web-readonly-serial-wasm-bridge/src/lib.rs
+            docs/m3/README.md
+            policy/webserial-wasm-assets.json
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge.js
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm
+            web/src/App.tsx
+            web/tests/browser/webserial-readonly-smoke.mjs
+            web/tests/webapp-readonly-fc-browser-smoke.mjs
+          )
+          for path in "${paths[@]}"; do
+            mkdir -p "$RUNNER_TEMP/m3-result/$(dirname "$path")"
+            cp "$path" "$RUNNER_TEMP/m3-result/$path"
+          done
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'm3-result'
+          records = []
+          for path in sorted(p for p in root.rglob('*') if p.is_file()):
+              records.append({
+                  'path': path.relative_to(root).as_posix(),
+                  'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                  'size': path.stat().st_size,
+              })
+          (root / 'M3-INTEGRATION-ARTIFACT.json').write_text(
+              json.dumps({'schema': 1, 'files': records}, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          tar -C "$RUNNER_TEMP/m3-result" -czf "$RUNNER_TEMP/m3-api147-integration-result.tar.gz" .
 
-      - name: Commit reviewed one-shot result
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "FPV-Arabic"
-          git config user.email "295969497+melyanneahmed-rgb@users.noreply.github.com"
-          git add -A
-          test -z "$(git ls-files --error-unmatch scripts/tmp_m3_api147_integrate.py 2>/dev/null || true)"
-          test -z "$(git ls-files --error-unmatch .github/workflows/tmp-m3-api147-integrator.yml 2>/dev/null || true)"
-          git diff --cached --check
-          git commit -m "feat(m3): integrate API 1.47 read-only identification"
-          git push origin HEAD:feat/m3-api147-readonly-identification
+      - name: Upload reviewed integration result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: m3-api147-integration-result
+          path: ${{ runner.temp }}/m3-api147-integration-result.tar.gz
+          if-no-files-found: error
+          retention-days: 3
