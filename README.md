@@ -8,24 +8,30 @@ internal implementation details rather than the product identity.
 
 ## Status
 
-**M1 accepted on simulation; G1 merged; M2 product-core work in progress. This is not a
-production release and is not hardware validated.**
+**M1 accepted on simulation; G1 merged; M2 production read-only Web/PWA connection merged;
+M3 read-only capability-pack work started. This is not a production release and hardware
+support is not validated.**
 
-M0 foundations are complete. The current M1 candidate implements one deliberately narrow
-vertical slice for the Betaflight 4.5.5 `SYSTEM_INIT` beeper bit over project-owned Mock and
-Replay transports: Identify → Read → Plan → Backup → Write → Save → Reboot → Reconnect →
-Verify → Recovery/Report. It includes injected failure coverage, durable local journal
-evidence and fail-closed resume handling.
+M0 foundations are complete. M1 implements one deliberately narrow vertical slice for the
+Betaflight 4.5.5 `SYSTEM_INIT` beeper bit over project-owned Mock and Replay transports:
+Identify → Read → Plan → Backup → Write → Save → Reboot → Reconnect → Verify →
+Recovery/Report. Its write evidence remains simulation evidence only.
 
-M2 now builds the protocol-independent product plan and an effect boundary between the
-deterministic Rust core and asynchronous Web/native transport and storage adapters. The new
-boundary performs no I/O and adds no hardware authority; CI cross-compiles its first crates
-for `wasm32-unknown-unknown`. See `docs/m2/README.md`.
+M2 integrates the repository-owned React/PWA shell with the deterministic Rust/WASM core,
+IndexedDB journal storage, canonical same-origin WASM assets and a Rust-owned Web Serial
+read-only identity path. A bounded physical USB-only attempt reached the early API-scope gate
+and stopped on an unsupported observed API outcome; it did **not** complete identity and does
+not establish hardware support. The Android artifact is a development-validation thin wrapper
+with no native flight-controller USB authority.
 
-The deployed PWA shell is not yet repository-integrated with this Rust core. There is still
-no production serial/USB transport, firmware flashing, motor control or hardware-support
-claim. No flight controller has been contacted, written to or flashed by this repository.
-See `docs/m1/README.md` for the exact acceptance boundary.
+M3 starts the ADR-0007 capability-pack layer as descriptive review-only data. Its first slice
+validates exact firmware/API/version/target descriptors and resolves them fail-closed for
+read-only knowledge. It has no write-enabled capability-pack state and adds no hardware
+authority. See `docs/m3/README.md`.
+
+There is still no production hardware write transport, firmware flashing, motor control,
+Android native FC USB support or hardware-support claim. Real writes remain separately gated by
+backup, explicit approval, verification and recovery requirements.
 
 ## What this project is
 
@@ -64,7 +70,8 @@ lifecycle. It does not depend on, import from, or share code with any other repo
 | Source provenance policy | `provenance/README.md` |
 | Hardware support matrix | `docs/hardware-support-matrix/README.md` |
 | M1 simulation acceptance candidate | `docs/m1/README.md` |
-| M2 Product Core boundary | `docs/m2/README.md` |
+| M2 Product Core / Web read-only boundary | `docs/m2/README.md` |
+| M3 read-only capability-pack resolution | `docs/m3/README.md` |
 | Web dependency audit and policy | `docs/m2/WEB-DEPENDENCY-AUDIT.md` |
 | Approved Site v3 provenance boundary | `docs/m2/SMART-CONFIGURATOR-SITE-V3-PROVENANCE.md` |
 | Binding product contract | `docs/product/PRODUCT-CONTRACT.md` |
