@@ -49,8 +49,8 @@ jobs:
           set -euo pipefail
           test "${{ steps.ci.outputs.commit_sha }}" = "7de4c792301020d5c692af0d2452d15f26e502c3"
           test "${{ steps.ci.outputs.tree_sha }}" = "ef832f60615e392d3d8519468632b6b5fa533c51"
-          test "${{ steps.ci.outputs.ci_run_id }}" = "32339014946"
-          test "${{ steps.ci.outputs.ci_run_number }}" = "133"
+          test "${{ steps.ci.outputs.ci_run_id }}" = "32339255463"
+          test "${{ steps.ci.outputs.ci_run_number }}" = "136"
 
       - name: Install audited Web package without lifecycle scripts
         working-directory: web
