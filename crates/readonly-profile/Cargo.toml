@@ -1,0 +1,11 @@
+[package]
+name = "ade-readonly-profile"
+description = "Fail-closed read-only identity profile selection separated from hardware write scope."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dev-dependencies]
+ade-facts = { path = "../facts" }
+ade-protocol-msp = { path = "../protocol-msp" }
