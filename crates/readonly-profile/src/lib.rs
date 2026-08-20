@@ -134,7 +134,7 @@ pub const fn classify_readonly_api_profile(
 
 /// Whether the observed four-byte firmware variant completes a candidate's profile gate.
 #[must_use]
-pub const fn accept_variant(candidate: ReadonlyProfileCandidate, observed: [u8; 4]) -> bool {
+pub fn accept_variant(candidate: ReadonlyProfileCandidate, observed: [u8; 4]) -> bool {
     match candidate.variant_gate {
         VariantGate::Exact(expected) => expected == observed,
     }
