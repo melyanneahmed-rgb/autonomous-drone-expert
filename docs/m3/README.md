@@ -1,6 +1,6 @@
 # M3 — Read-only capability-pack resolution
 
-**Status:** slices 1–2 merged; next-profile provenance review in progress
+**Status:** slices 1–3 merged; read-profile/write-scope separation in progress
 
 M3 begins the firmware capability-pack layer accepted by ADR-0007. This milestone does not add a
 hardware write, a driver, a transport, a command table or a signed-pack distribution system.
@@ -64,34 +64,50 @@ The adapter:
 This creates no path from a capability match to `WriteApproval`, transport exchange or a hardware
 command.
 
-## Pinned research for the next read-only profile
+## Slice 3 — pinned research for the next read-only profile
 
-Before any decoder or identification-sequence change, M3 is completing the clean-room provenance
-set for Betaflight `2025.12.1` at MSP protocol `0` / API `1.47`, resolved to official upstream
-commit `85d201376a1fc33b223c27448808c2cc7b8f2743`.
+The clean-room provenance set for Betaflight `2025.12.1` at MSP protocol `0` / API `1.47` is now
+recorded against official upstream commit `85d201376a1fc33b223c27448808c2cc7b8f2743` before any
+decoder or identification-sequence change.
 
-The repository already records:
+The repository records:
 
 - `MSP_API_VERSION`: three bytes and the pinned protocol/API tuple;
-- `MSP_FC_VERSION`: the 2025 calendar-version triplet followed by a one-byte length and the
-  version-string bytes.
-
-The current provenance review adds:
-
 - `MSP_FC_VARIANT`: fixed four-byte `BTFL` identifier;
+- `MSP_FC_VERSION`: the 2025 calendar-version triplet followed by a one-byte length and the
+  version-string bytes;
 - `MSP_BOARD_INFO`: the complete documented variable-length field sequence through the API 1.47
-  tail, including explicit pstring bounds and the 32-byte signature that must remain excluded
-  from stable identity/persistence.
+  tail, including bounded pstrings and the 32-byte signature that must remain excluded from stable
+  identity/persistence.
 
 These are `PINNED_SOURCE_RECORDED / NOT_REPRODUCED` research facts only. They do not mean the
 product parses API 1.47, they do not identify the owner's hardware, and they do not broaden the
 M1 write scope.
 
+## Slice 4 — readable profile versus write eligibility
+
+`ade-readonly-profile` creates an explicit type boundary before API 1.47 parsing is enabled.
+The crate has no production dependency at all and owns no protocol command id, raw frame, device
+handle, transport or write approval.
+
+It currently describes two exact read-layout candidates:
+
+- protocol 0 / API 1.46: legacy three-byte `FC_VERSION`;
+- protocol 0 / API 1.47: calendar triplet plus one-byte-length version string.
+
+Both require the exact four-byte `BTFL` variant before profile acceptance. Unknown protocol/API
+or variant combinations fail closed. Every candidate permanently carries
+`NeverAuthorizesWrites`; there is no write-enabled variant.
+
+A cross-crate regression test intentionally proves the separation: API 1.47 can be known to the
+read-profile registry while `ade-facts::check_m1_api_scope` still rejects API 1.47 for the M1 write
+scope. Future read support must not alter that fact accidentally.
+
 ## Safety properties
 
 The current M3 slices cannot represent or perform:
 
-- MSP/CLI command ids or arbitrary payloads as capability-pack actions;
+- MSP/CLI command ids or arbitrary payloads as capability-pack or read-profile actions;
 - a transport or device handle;
 - a write approval;
 - SET/SAVE/EEPROM/reboot/motor/arm/DFU/flashing authority;
@@ -101,7 +117,7 @@ The current M3 slices cannot represent or perform:
 
 An invalid descriptor is a terminal typed error instead of being skipped. More than one matching
 descriptor is `Ambiguous`; the resolver never chooses one implicitly. An unknown firmware family
-is also terminal for capability selection.
+or unreadable profile is also terminal for the respective read-only selection layer.
 
 ## Distribution boundary
 
@@ -113,12 +129,12 @@ remain part of the later Knowledge Platform milestone.
 
 ## Next M3 work
 
-1. Separate **readable identity profiles** from the still-exact M1 write scope so adding a known
-   read-only firmware/API profile can never silently broaden write eligibility.
-2. After the provenance records are accepted, implement the next read-only decoder/profile behind
-   that separation with adversarial parser tests and no write-scope change.
-3. Add capability-pack selection evidence to the Web diagnostic/result model without exposing
-   firmware-engine details in the ordinary product UI.
+1. After the read-profile separation is accepted, implement the API 1.47 read-only decoder/profile
+   with adversarial parser tests and no M1 write-scope change.
+2. Integrate that profile into the Rust-owned identification state machine so the variant gate is
+   checked before the profile-specific firmware-version decoder runs.
+3. Add capability/profile selection evidence to the bounded Web diagnostic/result model without
+   exposing firmware-engine details in the ordinary product UI.
 4. Keep all real writes blocked until the later write milestone and a separate owner approval.
 
 No physical operation is required for these slices.
