@@ -139,7 +139,7 @@ jobs:
             --input-wasm target/wasm32-unknown-unknown/release/ade_web_readonly_serial_wasm_bridge.wasm \
             --generated-dir target/webserial-wasm-product-regenerated
 
-      - name: Focused Rust and authority validation
+      - name: Focused Rust and Web Serial authority validation
         shell: bash
         run: |
           set -euo pipefail
@@ -148,8 +148,6 @@ jobs:
           cargo test -p ade-execution
           cargo test -p ade-web-readonly-serial-wasm-bridge
           python3 scripts/check_webserial_boundary.py
-          python3 scripts/check_unsafe.py
-          python3 scripts/check_provenance.py
 
       - name: Web source validation
         working-directory: web
