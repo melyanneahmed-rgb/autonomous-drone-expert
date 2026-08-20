@@ -20,24 +20,9 @@
     "resolved_commit": "85d201376a1fc33b223c27448808c2cc7b8f2743"
   },
   "payload_layout": {
-    "fields": [
-      "board_identifier[4]",
-      "hardware_revision:u16_le",
-      "fc_type:u8",
-      "target_capabilities:u8",
-      "target_name:pstring_u8_length",
-      "board_name:pstring_u8_length",
-      "manufacturer_id:pstring_u8_length",
-      "signature[32]",
-      "mcu_type_id:u8",
-      "configuration_state:u8",
-      "gyro_sample_rate_hz:u16_le",
-      "configuration_problems:u32_le",
-      "spi_device_count:u8",
-      "i2c_device_count:u8"
-    ],
+    "fields": null,
     "length_bytes": null,
-    "note": "Variable-length read-only reply. The pinned source writes a 4-byte board identifier, u16 hardware revision, u8 FC type, u8 target-capabilities bitfield, length-prefixed target/board/manufacturer strings, a 32-byte signature, then u8 MCU type id, u8 configuration state, u16 gyro sample rate, u32 configuration-problems flags, u8 SPI device count and u8 I2C device count. BOARD_IDENTIFIER_LENGTH is 4 in msp_protocol.h and SIGNATURE_LENGTH is 32 in pg/board.h. A future parser must bounds-check every pstring, consume the complete documented payload and keep the per-unit signature out of stable identity/persistence."
+    "note": "Variable-length read-only reply. The pinned source writes, in order: board_identifier[4]; hardware_revision u16 little-endian; fc_type u8; target_capabilities u8; target_name with a one-byte length followed by that many bytes; board_name with the same one-byte-length framing; manufacturer_id with the same framing; signature[32]; mcu_type_id u8; configuration_state u8; gyro_sample_rate_hz u16 little-endian; configuration_problems u32 little-endian; spi_device_count u8; i2c_device_count u8. BOARD_IDENTIFIER_LENGTH is 4 in msp_protocol.h and SIGNATURE_LENGTH is 32 in pg/board.h. A future parser must bounds-check every length-prefixed string, consume the complete documented payload and keep the per-unit signature out of stable identity and persistence."
   },
   "source_state": "PINNED_SOURCE_RECORDED",
   "verification_state": "NOT_REPRODUCED",
