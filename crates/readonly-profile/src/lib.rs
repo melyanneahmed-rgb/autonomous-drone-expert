@@ -148,8 +148,7 @@ mod tests {
 
     #[test]
     fn api_146_and_147_have_distinct_reviewed_read_candidates() {
-        let ReadonlyApiProfileStatus::Candidate(api_146) =
-            classify_readonly_api_profile(0, 1, 46)
+        let ReadonlyApiProfileStatus::Candidate(api_146) = classify_readonly_api_profile(0, 1, 46)
         else {
             panic!("API 1.46 must have a reviewed read candidate");
         };
@@ -159,8 +158,7 @@ mod tests {
         );
         assert_eq!(api_146.fc_version_layout, FcVersionLayout::LegacyThreeByte);
 
-        let ReadonlyApiProfileStatus::Candidate(api_147) =
-            classify_readonly_api_profile(0, 1, 47)
+        let ReadonlyApiProfileStatus::Candidate(api_147) = classify_readonly_api_profile(0, 1, 47)
         else {
             panic!("API 1.47 must have a reviewed read candidate");
         };
