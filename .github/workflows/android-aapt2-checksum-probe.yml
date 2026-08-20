@@ -1,0 +1,107 @@
+name: Android AAPT2 Checksum Probe
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe trusted Linux aapt2 checksum
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact PR18 source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: b0e5d243eecd978cb0489d9682d67fde8dac5fc7
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Confirm verification metadata gap
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'component group="com.android.tools.build" name="aapt2" version="9.2.1-15009934"' android/gradle/verification-metadata.xml
+          grep -q 'artifact name="aapt2-9.2.1-15009934-windows.jar"' android/gradle/verification-metadata.xml
+          if grep -q 'artifact name="aapt2-9.2.1-15009934-linux.jar"' android/gradle/verification-metadata.xml; then
+            echo 'unexpected: Linux aapt2 checksum already present' >&2
+            exit 1
+          fi
+
+      - name: Download exact official Google Maven Linux aapt2 and hash it
+        id: direct
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/9.2.1-15009934/aapt2-9.2.1-15009934-linux.jar'
+          file="$RUNNER_TEMP/aapt2-9.2.1-15009934-linux.jar"
+          curl --fail --location --proto '=https' --tlsv1.2 "$url" --output "$file"
+          sha="$(sha256sum "$file" | cut -d ' ' -f1)"
+          size="$(stat -c '%s' "$file")"
+          test -n "$sha"
+          test "$size" -gt 0
+          echo "direct_sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "direct_size=$size" >> "$GITHUB_OUTPUT"
+          echo "AAPT2_OFFICIAL_URL=$url"
+          echo "AAPT2_DIRECT_SHA256=$sha"
+          echo "AAPT2_DIRECT_SIZE=$size"
+
+      - name: Install checksum-verified Gradle probe tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://services.gradle.org/distributions/gradle-9.4.1-bin.zip \
+            --output "$RUNNER_TEMP/gradle-9.4.1-bin.zip"
+          echo '2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb  '"$RUNNER_TEMP/gradle-9.4.1-bin.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/gradle-9.4.1-bin.zip" -d "$RUNNER_TEMP"
+
+      - name: Independently let Gradle write verification metadata in disposable copy
+        id: gradle
+        shell: bash
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/gradle-probe-home
+        run: |
+          set -euo pipefail
+          cp -a android "$RUNNER_TEMP/android-probe"
+          "$RUNNER_TEMP/gradle-9.4.1/bin/gradle" \
+            --project-dir "$RUNNER_TEMP/android-probe" \
+            :app:compileDebugNavigationResources \
+            --write-verification-metadata sha256 \
+            --no-daemon
+          python3 - "$RUNNER_TEMP/android-probe/gradle/verification-metadata.xml" "$GITHUB_OUTPUT" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          path, out = sys.argv[1], sys.argv[2]
+          ns = {'v': 'https://schema.gradle.org/dependency-verification'}
+          root = ET.parse(path).getroot()
+          wanted = None
+          for comp in root.findall('.//v:component', ns):
+              if (comp.get('group'), comp.get('name'), comp.get('version')) == ('com.android.tools.build', 'aapt2', '9.2.1-15009934'):
+                  for artifact in comp.findall('v:artifact', ns):
+                      if artifact.get('name') == 'aapt2-9.2.1-15009934-linux.jar':
+                          sha = artifact.find('v:sha256', ns)
+                          if sha is not None:
+                              wanted = sha.get('value')
+          if not wanted:
+              raise SystemExit('Gradle did not generate Linux aapt2 checksum')
+          with open(out, 'a', encoding='utf-8') as handle:
+              handle.write(f'gradle_sha256={wanted}\n')
+          print(f'AAPT2_GRADLE_SHA256={wanted}')
+          PY
+
+      - name: Require independent checksum agreement
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ steps.direct.outputs.direct_sha256 }}' = '${{ steps.gradle.outputs.gradle_sha256 }}'
+          echo 'AAPT2_CHECKSUM_AGREEMENT=YES'
+          echo 'AAPT2_SHA256=${{ steps.direct.outputs.direct_sha256 }}'
+          echo 'AAPT2_SIZE=${{ steps.direct.outputs.direct_size }}'
+
+      - name: Prove repository source remained untouched
+        run: git diff --exit-code
