@@ -20,11 +20,9 @@
     "resolved_commit": "85d201376a1fc33b223c27448808c2cc7b8f2743"
   },
   "payload_layout": {
-    "fields": [
-      "flight_controller_identifier[4]"
-    ],
+    "fields": null,
     "length_bytes": 4,
-    "note": "Read-only reply is exactly the four-byte flight-controller identifier. At the pinned tag FLIGHT_CONTROLLER_IDENTIFIER_LENGTH is 4 and FC_FIRMWARE_IDENTIFIER is BTFL."
+    "note": "Read-only reply is exactly one four-byte flight-controller-identifier field. At the pinned tag FLIGHT_CONTROLLER_IDENTIFIER_LENGTH is 4 and FC_FIRMWARE_IDENTIFIER is BTFL."
   },
   "source_state": "PINNED_SOURCE_RECORDED",
   "verification_state": "NOT_REPRODUCED",
