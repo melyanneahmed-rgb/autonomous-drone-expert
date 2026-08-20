@@ -154,6 +154,8 @@ test("UI output and state are privacy bounded and make no hardware claim", () =>
     "reading-identity",
     "read-complete",
     "scope-mismatch",
+    "read-only-complete",
+    "read-profile-unsupported",
     "api-unsupported",
     "cancelled",
     "unavailable",
@@ -161,8 +163,10 @@ test("UI output and state are privacy bounded and make no hardware claim", () =>
   ]) {
     assert.ok(app.includes(`"${phase}"`), `missing bounded UI phase: ${phase}`);
   }
+  assert.match(app, /"read-only-complete": "اكتملت قراءة الهوية — هذا الإصدار مدعوم للقراءة فقط"/);
   assert.match(app, /"api-unsupported": "إصدار واجهة وحدة التحكم غير مدعوم حاليًا"/);
   assert.match(app, /connection\.phase !== "api-unsupported"/);
+  assert.match(app, /connection\.phase !== "read-profile-unsupported"/);
 });
 
 test("diagnostic UI is collapsed, RAM-only, owner-copyable, and owner-clearable", () => {

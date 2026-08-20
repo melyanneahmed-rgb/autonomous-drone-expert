@@ -68,6 +68,7 @@ dependencies = [
  "ade-facts",
  "ade-mock-fc",
  "ade-protocol-msp",
+ "ade-readonly-profile",
  "ade-safety",
  "ade-session",
  "ade-transport",

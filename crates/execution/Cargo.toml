@@ -13,6 +13,7 @@ ade-safety = { path = "../safety" }
 ade-session = { path = "../session" }
 ade-transport = { path = "../transport" }
 ade-facts = { path = "../facts" }
+ade-readonly-profile = { path = "../readonly-profile" }
 
 [dev-dependencies]
 ade-mock-fc = { path = "../mock-fc" }

@@ -22,10 +22,15 @@
 //! an empty payload. Raw request/reply payloads are never logged; the transport's audit sink
 //! records metadata only.
 
-use ade_facts::{ApiScopeStatus, DeviceIdentity, check_m1_api_scope};
+use ade_facts::DeviceIdentity;
 use ade_protocol_msp::{
-    ApiVersion, BeeperConfigSnapshot, CommandId, Correlator, Direction, FcVariant, FcVersion,
-    Frame, MspError, ReplyClass, SetBeeperConfig, decode_frame, encode_frame,
+    ApiVersion, BeeperConfigSnapshot, CommandId, Correlator, Direction, FcVariant, Frame, MspError,
+    ReplyClass, SetBeeperConfig, decode_frame, encode_frame,
+};
+use ade_readonly_profile::{
+    ReadProfileWriteAuthority, ReadonlyApiProfileStatus, ReadonlyFcVersion,
+    ReadonlyIdentityProfileId, ReadonlyProfileCandidate, ReadonlyProfileDecodeError,
+    accept_variant, classify_readonly_api_profile, decode_fc_version,
 };
 use ade_safety::{
     ExecutionTarget, HARDWARE_WRITE_GATE_NOT_APPROVED, RecoveryClass, WriteApproval,
@@ -149,8 +154,13 @@ pub enum ExecError {
     NoIdentificationRequestPending,
     /// The identification sequence has reached a terminal supported or unsupported result.
     IdentificationAlreadyComplete,
-    /// A structurally valid API reply is outside the proposed product scope.
+    /// A structurally valid API reply has no reviewed read-only profile.
     ApiScopeMismatch {
+        /// Stable field label; never a raw payload or device value.
+        field: &'static str,
+    },
+    /// A reviewed API profile was selected but its exact firmware-family gate failed.
+    ReadProfileMismatch {
         /// Stable field label; never a raw payload or device value.
         field: &'static str,
     },
@@ -178,20 +188,99 @@ pub struct IdentificationRequest {
     bytes: Vec<u8>,
 }
 
+/// Stable identity facts from a reviewed read-only profile that is intentionally not write-eligible.
+///
+/// This type is separate from [`DeviceIdentity`]: callers cannot accidentally pass an API 1.47
+/// read result into the existing M1 write-capable identity flow. Per-unit signature bytes and
+/// volatile board state are deliberately not retained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadonlyProfileIdentity {
+    /// Stable reviewed read-profile identifier.
+    pub profile_id: ReadonlyIdentityProfileId,
+    /// Permanent read-profile write boundary.
+    pub write_authority: ReadProfileWriteAuthority,
+    /// Observed MSP API tuple.
+    pub api: ApiVersion,
+    /// Exact four-byte firmware variant.
+    pub variant: FcVariant,
+    /// Profile-specific firmware-version representation.
+    pub version: ReadonlyFcVersion,
+    /// Four-byte board identifier.
+    pub board_identifier: [u8; 4],
+    /// Hardware revision.
+    pub hardware_revision: u16,
+    /// FC type byte.
+    pub fc_type: u8,
+    /// Target capability bitfield.
+    pub target_capabilities: u8,
+    /// Stable target name.
+    pub target_name: String,
+    /// Stable board name.
+    pub board_name: String,
+    /// Stable manufacturer identifier.
+    pub manufacturer_id: String,
+    /// MCU type identifier.
+    pub mcu_type_id: u8,
+}
+
+impl ReadonlyProfileIdentity {
+    fn from_parts(
+        candidate: ReadonlyProfileCandidate,
+        api: ApiVersion,
+        variant: FcVariant,
+        version: ReadonlyFcVersion,
+        board: &ade_protocol_msp::BoardInfo,
+    ) -> Self {
+        Self {
+            profile_id: candidate.id,
+            write_authority: candidate.write_authority,
+            api,
+            variant,
+            version,
+            board_identifier: board.board_identifier,
+            hardware_revision: board.hardware_revision,
+            fc_type: board.fc_type,
+            target_capabilities: board.target_capabilities,
+            target_name: board.target_name.clone(),
+            board_name: board.board_name.clone(),
+            manufacturer_id: board.manufacturer_id.clone(),
+            mcu_type_id: board.mcu_type_id,
+        }
+    }
+
+    /// Human-facing firmware version for the bounded read-only result.
+    #[must_use]
+    pub fn fc_version_string(&self) -> String {
+        match &self.version {
+            ReadonlyFcVersion::Legacy(version) => {
+                format!("{}.{}.{}", version.major, version.minor, version.patch)
+            }
+            ReadonlyFcVersion::CalendarExtended { version_string, .. } => version_string.clone(),
+        }
+    }
+}
+
 /// Typed progress from the Rust-owned read-only identification state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentificationProgress {
-    /// The exact supported API path requires the next canonical empty-payload read.
+    /// A reviewed read profile requires the next canonical empty-payload read.
     Pending,
-    /// All four supported replies produced a complete device identity.
+    /// The legacy API 1.46 path produced the existing M1 device identity.
     Complete(DeviceIdentity),
-    /// The API reply was structurally valid but outside the proposed product scope.
-    ///
-    /// No variant, firmware version, board information, or complete identity exists here.
+    /// A reviewed read-only profile outside M1 write eligibility completed safely.
+    ReadOnlyComplete(ReadonlyProfileIdentity),
+    /// The API reply was structurally valid but no reviewed read-only profile exists.
     ApiScopeMismatch {
         /// The only parsed fact available at this point.
         api: ApiVersion,
         /// Stable scope field label.
+        field: &'static str,
+    },
+    /// A reviewed API profile existed but the exact firmware-variant gate failed.
+    ReadProfileMismatch {
+        /// The API fact established before the variant gate.
+        api: ApiVersion,
+        /// Stable mismatch field.
         field: &'static str,
     },
 }
@@ -252,8 +341,9 @@ pub struct ReadonlyIdentification {
     request_pending: bool,
     correlator: Correlator,
     api: Option<ApiVersion>,
+    read_profile: Option<ReadonlyProfileCandidate>,
     variant: Option<FcVariant>,
-    version: Option<FcVersion>,
+    version: Option<ReadonlyFcVersion>,
 }
 
 impl ReadonlyIdentification {
@@ -270,6 +360,7 @@ impl ReadonlyIdentification {
             request_pending: false,
             correlator: Correlator::new(),
             api: None,
+            read_profile: None,
             variant: None,
             version: None,
         })
@@ -347,45 +438,108 @@ impl ReadonlyIdentification {
         match self.stage {
             IdentificationStage::ApiVersion => {
                 let api = ApiVersion::from_reply(frame)?;
-                match check_m1_api_scope(&api) {
-                    ApiScopeStatus::InScope => {
+                match classify_readonly_api_profile(
+                    api.protocol_version,
+                    api.api_major,
+                    api.api_minor,
+                ) {
+                    ReadonlyApiProfileStatus::Candidate(candidate) => {
                         self.api = Some(api);
+                        self.read_profile = Some(candidate);
                         self.stage = IdentificationStage::FcVariant;
                         Ok(IdentificationProgress::Pending)
                     }
-                    ApiScopeStatus::Mismatch { field } => {
+                    ReadonlyApiProfileStatus::UnsupportedProtocol => {
                         self.stage = IdentificationStage::Complete;
-                        Ok(IdentificationProgress::ApiScopeMismatch { api, field })
+                        Ok(IdentificationProgress::ApiScopeMismatch {
+                            api,
+                            field: "protocol_version",
+                        })
+                    }
+                    ReadonlyApiProfileStatus::UnsupportedApi => {
+                        self.stage = IdentificationStage::Complete;
+                        Ok(IdentificationProgress::ApiScopeMismatch {
+                            api,
+                            field: "msp_api_version",
+                        })
                     }
                 }
             }
             IdentificationStage::FcVariant => {
-                self.variant = Some(FcVariant::from_reply(frame)?);
+                let variant = FcVariant::from_reply(frame)?;
+                let candidate = self
+                    .read_profile
+                    .ok_or(ExecError::NoIdentificationRequestPending)?;
+                if !accept_variant(candidate, variant.identifier) {
+                    let api = self
+                        .api
+                        .take()
+                        .ok_or(ExecError::NoIdentificationRequestPending)?;
+                    self.read_profile = None;
+                    self.stage = IdentificationStage::Complete;
+                    return Ok(IdentificationProgress::ReadProfileMismatch {
+                        api,
+                        field: "fc_variant",
+                    });
+                }
+                self.variant = Some(variant);
                 self.stage = IdentificationStage::FcVersion;
                 Ok(IdentificationProgress::Pending)
             }
             IdentificationStage::FcVersion => {
-                self.version = Some(FcVersion::from_reply(frame)?);
+                let candidate = self
+                    .read_profile
+                    .ok_or(ExecError::NoIdentificationRequestPending)?;
+                let variant = self
+                    .variant
+                    .as_ref()
+                    .ok_or(ExecError::NoIdentificationRequestPending)?;
+                let version = match decode_fc_version(candidate, variant.identifier, frame) {
+                    Ok(version) => version,
+                    Err(ReadonlyProfileDecodeError::VariantMismatch) => {
+                        return Err(ExecError::ReadProfileMismatch {
+                            field: "fc_variant",
+                        });
+                    }
+                    Err(ReadonlyProfileDecodeError::Protocol(error)) => {
+                        return Err(ExecError::Payload(error));
+                    }
+                };
+                self.version = Some(version);
                 self.stage = IdentificationStage::BoardInfo;
                 Ok(IdentificationProgress::Pending)
             }
             IdentificationStage::BoardInfo => {
                 let board = ade_protocol_msp::BoardInfo::from_reply(frame)?;
+                let candidate = self
+                    .read_profile
+                    .take()
+                    .ok_or(ExecError::NoIdentificationRequestPending)?;
+                let api = self
+                    .api
+                    .take()
+                    .ok_or(ExecError::NoIdentificationRequestPending)?;
+                let variant = self
+                    .variant
+                    .take()
+                    .ok_or(ExecError::NoIdentificationRequestPending)?;
+                let version = self
+                    .version
+                    .take()
+                    .ok_or(ExecError::NoIdentificationRequestPending)?;
                 self.stage = IdentificationStage::Complete;
-                Ok(IdentificationProgress::Complete(
-                    DeviceIdentity::from_parts(
-                        self.api
-                            .take()
-                            .ok_or(ExecError::NoIdentificationRequestPending)?,
-                        self.variant
-                            .take()
-                            .ok_or(ExecError::NoIdentificationRequestPending)?,
-                        self.version
-                            .take()
-                            .ok_or(ExecError::NoIdentificationRequestPending)?,
-                        &board,
-                    ),
-                ))
+                match version {
+                    ReadonlyFcVersion::Legacy(version) => Ok(IdentificationProgress::Complete(
+                        DeviceIdentity::from_parts(api, variant, version, &board),
+                    )),
+                    version @ ReadonlyFcVersion::CalendarExtended { .. } => {
+                        Ok(IdentificationProgress::ReadOnlyComplete(
+                            ReadonlyProfileIdentity::from_parts(
+                                candidate, api, variant, version, &board,
+                            ),
+                        ))
+                    }
+                }
             }
             IdentificationStage::Complete => Err(ExecError::IdentificationAlreadyComplete),
         }
@@ -590,8 +744,16 @@ impl Executor {
             match identification.accept_response(&reply)? {
                 IdentificationProgress::Pending => {}
                 IdentificationProgress::Complete(identity) => return Ok(identity),
+                IdentificationProgress::ReadOnlyComplete(_) => {
+                    return Err(ExecError::ApiScopeMismatch {
+                        field: "msp_api_version",
+                    });
+                }
                 IdentificationProgress::ApiScopeMismatch { field, .. } => {
                     return Err(ExecError::ApiScopeMismatch { field });
+                }
+                IdentificationProgress::ReadProfileMismatch { field, .. } => {
+                    return Err(ExecError::ReadProfileMismatch { field });
                 }
             }
         }
@@ -986,8 +1148,10 @@ mod tests {
             match incremental.accept_response(&reply).unwrap() {
                 IdentificationProgress::Pending => {}
                 IdentificationProgress::Complete(identity) => break identity,
-                IdentificationProgress::ApiScopeMismatch { .. } => {
-                    panic!("the supported mock API cannot be rejected")
+                IdentificationProgress::ReadOnlyComplete(_)
+                | IdentificationProgress::ApiScopeMismatch { .. }
+                | IdentificationProgress::ReadProfileMismatch { .. } => {
+                    panic!("the supported legacy mock API cannot leave the legacy identity path")
                 }
             }
         };
@@ -1013,7 +1177,7 @@ mod tests {
     fn unsupported_api_versions_end_the_sequence_after_the_first_empty_read() {
         for (payload, field) in [
             ([0, 1, 45], "msp_api_version"),
-            ([0, 1, 47], "msp_api_version"),
+            ([0, 1, 48], "msp_api_version"),
             ([0, 2, 46], "msp_api_version"),
             ([1, 1, 46], "protocol_version"),
         ] {

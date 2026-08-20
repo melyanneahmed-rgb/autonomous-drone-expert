@@ -50,6 +50,8 @@ export interface PrivacyBoundedIdentityResult {
   outcome:
     | "in-scope"
     | "scope-mismatch"
+    | "read-only-complete"
+    | "read-profile-unsupported"
     | "api-unsupported"
     | "failed"
     | "pending";

@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use ade_core_api::{ScopeStatus, check_scope};
 use ade_execution::{
     ExecError, IdentificationProgress, IdentificationRequest, IdentificationStage,
-    ReadonlyIdentification,
+    ReadonlyIdentification, ReadonlyProfileIdentity,
 };
 use ade_facts::DeviceIdentity;
 use ade_protocol_msp::{
@@ -133,6 +133,11 @@ enum FinalOutcome {
         field: &'static str,
     },
     ApiScopeMismatch {
+        api: ApiVersion,
+        field: &'static str,
+    },
+    ReadOnlyComplete(ReadonlyProfileIdentity),
+    ReadProfileMismatch {
         api: ApiVersion,
         field: &'static str,
     },
@@ -717,6 +722,11 @@ impl WasmReadonlySerialDiscovery {
                 });
                 self.start_close().map(Some)
             }
+            Ok(IdentificationProgress::ReadOnlyComplete(identity)) => {
+                self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
+                self.outcome = Some(FinalOutcome::ReadOnlyComplete(identity));
+                self.start_close().map(Some)
+            }
             Ok(IdentificationProgress::Pending) => {
                 self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
                 self.next_exchange().map(Some)
@@ -724,6 +734,11 @@ impl WasmReadonlySerialDiscovery {
             Ok(IdentificationProgress::ApiScopeMismatch { api, field }) => {
                 self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
                 self.outcome = Some(FinalOutcome::ApiScopeMismatch { api, field });
+                self.start_close().map(Some)
+            }
+            Ok(IdentificationProgress::ReadProfileMismatch { api, field }) => {
+                self.push_identity_trace("IDENTITY_STAGE_OK", stage, command, None);
+                self.outcome = Some(FinalOutcome::ReadProfileMismatch { api, field });
                 self.start_close().map(Some)
             }
             Err(error) => {
@@ -786,7 +801,17 @@ impl WasmReadonlySerialDiscovery {
             FinalOutcome::InScope(identity) | FinalOutcome::ScopeMismatch { identity, .. } => {
                 Some(identity)
             }
-            FinalOutcome::ApiScopeMismatch { .. } | FinalOutcome::Failed { .. } => None,
+            FinalOutcome::ApiScopeMismatch { .. }
+            | FinalOutcome::ReadOnlyComplete(_)
+            | FinalOutcome::ReadProfileMismatch { .. }
+            | FinalOutcome::Failed { .. } => None,
+        }
+    }
+
+    fn read_only_identity(&self) -> Option<&ReadonlyProfileIdentity> {
+        match self.outcome.as_ref()? {
+            FinalOutcome::ReadOnlyComplete(identity) => Some(identity),
+            _ => None,
         }
     }
 }
@@ -867,6 +892,12 @@ impl WasmReadonlySerialDiscovery {
             Some(FinalOutcome::ApiScopeMismatch { .. }) if self.phase == Phase::Complete => {
                 "api-unsupported"
             }
+            Some(FinalOutcome::ReadOnlyComplete(_)) if self.phase == Phase::Complete => {
+                "read-only-complete"
+            }
+            Some(FinalOutcome::ReadProfileMismatch { .. }) if self.phase == Phase::Complete => {
+                "read-profile-unsupported"
+            }
             Some(FinalOutcome::Failed { .. }) if self.phase == Phase::Complete => "failed",
             _ => "pending",
         }
@@ -914,7 +945,8 @@ impl WasmReadonlySerialDiscovery {
         match &self.outcome {
             Some(
                 FinalOutcome::ScopeMismatch { field, .. }
-                | FinalOutcome::ApiScopeMismatch { field, .. },
+                | FinalOutcome::ApiScopeMismatch { field, .. }
+                | FinalOutcome::ReadProfileMismatch { field, .. },
             ) => Some((*field).to_owned()),
             _ => None,
         }
@@ -923,9 +955,14 @@ impl WasmReadonlySerialDiscovery {
     #[wasm_bindgen(getter, js_name = apiVersion)]
     pub fn api_version(&self) -> Option<String> {
         match &self.outcome {
-            Some(FinalOutcome::ApiScopeMismatch { api, .. }) => {
-                Some(format!("{}.{}", api.api_major, api.api_minor))
-            }
+            Some(
+                FinalOutcome::ApiScopeMismatch { api, .. }
+                | FinalOutcome::ReadProfileMismatch { api, .. },
+            ) => Some(format!("{}.{}", api.api_major, api.api_minor)),
+            Some(FinalOutcome::ReadOnlyComplete(identity)) => Some(format!(
+                "{}.{}",
+                identity.api.api_major, identity.api.api_minor
+            )),
             _ => self
                 .identity()
                 .map(|identity| format!("{}.{}", identity.api.api_major, identity.api.api_minor)),
@@ -934,23 +971,33 @@ impl WasmReadonlySerialDiscovery {
 
     #[wasm_bindgen(getter, js_name = fcVariant)]
     pub fn fc_variant(&self) -> Option<String> {
-        self.identity()
+        self.read_only_identity()
             .map(|identity| identity.variant.identifier_string())
+            .or_else(|| {
+                self.identity()
+                    .map(|identity| identity.variant.identifier_string())
+            })
     }
 
     #[wasm_bindgen(getter, js_name = fcVersion)]
     pub fn fc_version(&self) -> Option<String> {
-        self.identity().map(|identity| {
-            format!(
-                "{}.{}.{}",
-                identity.version.major, identity.version.minor, identity.version.patch
-            )
-        })
+        self.read_only_identity()
+            .map(ReadonlyProfileIdentity::fc_version_string)
+            .or_else(|| {
+                self.identity().map(|identity| {
+                    format!(
+                        "{}.{}.{}",
+                        identity.version.major, identity.version.minor, identity.version.patch
+                    )
+                })
+            })
     }
 
     #[wasm_bindgen(getter, js_name = targetName)]
     pub fn target_name(&self) -> Option<String> {
-        self.identity().map(|identity| identity.target_name.clone())
+        self.read_only_identity()
+            .map(|identity| identity.target_name.clone())
+            .or_else(|| self.identity().map(|identity| identity.target_name.clone()))
     }
 
     #[wasm_bindgen(getter, js_name = hardwareObserved)]
@@ -1082,7 +1129,7 @@ mod tests {
     fn unsupported_api_versions_close_after_only_the_api_read() {
         for (payload, expected_api, expected_field) in [
             ([0, 1, 45], "1.45", "msp_api_version"),
-            ([0, 1, 47], "1.47", "msp_api_version"),
+            ([0, 1, 48], "1.48", "msp_api_version"),
             ([0, 2, 46], "2.46", "msp_api_version"),
             ([1, 1, 46], "1.46", "protocol_version"),
         ] {
@@ -1129,6 +1176,96 @@ mod tests {
                     && event.command == CommandId::ApiVersion
             }));
         }
+    }
+
+    #[test]
+    fn reviewed_api_147_betaflight_runs_all_four_reads_and_returns_read_only_identity() {
+        let mut bridge = WasmReadonlySerialDiscovery::create().unwrap();
+        let open = bridge.begin_open().unwrap();
+        let api = bridge.accept_open_ok(&open.request_id).unwrap();
+        let variant = feed_reply(
+            &mut bridge,
+            &api,
+            Direction::Reply,
+            CommandId::ApiVersion,
+            &[0, 1, 47],
+        );
+        let version = feed_reply(
+            &mut bridge,
+            &variant,
+            Direction::Reply,
+            CommandId::FcVariant,
+            b"BTFL",
+        );
+        let mut version_payload = vec![25, 12, 1, 9];
+        version_payload.extend_from_slice(b"2025.12.1");
+        let board = feed_reply(
+            &mut bridge,
+            &version,
+            Direction::Reply,
+            CommandId::FcVersion,
+            &version_payload,
+        );
+        let close = feed_reply(
+            &mut bridge,
+            &board,
+            Direction::Reply,
+            CommandId::BoardInfo,
+            &valid_board_payload(),
+        );
+        assert_eq!(close.kind, "close");
+        assert_eq!(bridge.api_version().as_deref(), Some("1.47"));
+        assert_eq!(bridge.fc_variant().as_deref(), Some("BTFL"));
+        assert_eq!(bridge.fc_version().as_deref(), Some("2025.12.1"));
+        assert_eq!(bridge.target_name().as_deref(), Some("SPEEDYBEEF405V4"));
+        assert!(bridge.scope_mismatch_field().is_none());
+        bridge.accept_close(&close.request_id, None).unwrap();
+        assert_eq!(bridge.outcome_kind(), "read-only-complete");
+        assert!(!bridge.hardware_observed());
+        assert_eq!(
+            bridge
+                .trace_events
+                .iter()
+                .filter(|event| event.event == "DIRECTIVE")
+                .count(),
+            4,
+        );
+    }
+
+    #[test]
+    fn reviewed_api_147_wrong_variant_stops_before_fc_version() {
+        let mut bridge = WasmReadonlySerialDiscovery::create().unwrap();
+        let open = bridge.begin_open().unwrap();
+        let api = bridge.accept_open_ok(&open.request_id).unwrap();
+        let variant = feed_reply(
+            &mut bridge,
+            &api,
+            Direction::Reply,
+            CommandId::ApiVersion,
+            &[0, 1, 47],
+        );
+        let close = feed_reply(
+            &mut bridge,
+            &variant,
+            Direction::Reply,
+            CommandId::FcVariant,
+            b"INAV",
+        );
+        assert_eq!(close.kind, "close");
+        assert_eq!(bridge.api_version().as_deref(), Some("1.47"));
+        assert_eq!(bridge.scope_mismatch_field().as_deref(), Some("fc_variant"));
+        assert!(bridge.fc_variant().is_none());
+        bridge.accept_close(&close.request_id, None).unwrap();
+        assert_eq!(bridge.outcome_kind(), "read-profile-unsupported");
+        assert!(!bridge.hardware_observed());
+        assert_eq!(
+            bridge
+                .trace_events
+                .iter()
+                .filter(|event| event.event == "DIRECTIVE")
+                .count(),
+            2,
+        );
     }
 
     #[test]
