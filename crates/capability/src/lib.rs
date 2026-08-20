@@ -226,9 +226,7 @@ pub fn validate_pack_descriptor(pack: &CapabilityPackDescriptor) -> Result<(), D
         return Err(DescriptorError::InvertedVersionRange);
     }
     match pack.target {
-        TargetSelector::Exact(target) if target.is_empty() => {
-            return Err(DescriptorError::EmptyExactTarget);
-        }
+        TargetSelector::Exact("") => return Err(DescriptorError::EmptyExactTarget),
         TargetSelector::Exact(_) => {}
     }
     Ok(())
