@@ -24,7 +24,10 @@ jobs:
 
       - name: Apply deterministic M3 API 1.47 read-only integration
         shell: bash
-        run: python3 scripts/tmp_m3_api147_state_machine.py
+        run: |
+          python3 scripts/tmp_m3_api147_state_machine.py
+          sed -i 's/IdentificationProgress, IdentificationStage, ReadonlyIdentification/IdentificationProgress, ReadonlyIdentification/' \
+            crates/execution/tests/api147_readonly_identification.rs
 
       - name: Format and focused Rust validation
         shell: bash
@@ -84,12 +87,10 @@ jobs:
           source_path = root / policy['source']['rust_source']['path']
           policy['source']['rust_source']['sha256'] = sha256(source_path)
           policy['source']['rust_source']['git_blob_sha1'] = git_blob_sha1(source_path)
-
           for record in policy['outputs']:
               path = root / record['path']
               record['sha256'] = sha256(path)
               record['size'] = path.stat().st_size
-
           policy_path.write_text(json.dumps(policy, indent=2) + '\n', encoding='utf-8')
           PY
           python3 scripts/verify_webserial_product_assets.py \
@@ -108,13 +109,14 @@ jobs:
             crates/execution/tests/api147_readonly_identification.rs \
             crates/web-readonly-serial-wasm-bridge/src/lib.rs \
             policy/webserial-wasm-assets.json \
-            web/public/wasm/ade_web_readonly_serial_wasm_bridge.js \
-            web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm \
             web/src/App.tsx \
             web/src/connection/readonly-fc-connection.d.mts \
             web/tests/browser/webserial-readonly-smoke.mjs \
             web/tests/webapp-readonly-fc-browser-smoke.mjs \
             web/tests/webapp-readonly-fc-connection.test.mjs
+          git add -f \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge.js \
+            web/public/wasm/ade_web_readonly_serial_wasm_bridge_bg.wasm
           if git diff --cached --quiet; then
             echo "production integration already present; nothing to push"
             exit 0
