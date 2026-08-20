@@ -31,6 +31,14 @@ All non-bundled runtime assets follow that same base:
 
 The production browser gate serves the real Vite artifact below the requested path and uses Chrome DevTools Protocol to prove that HTML, built JS/CSS, the manifest, both generated WASM bridge modules, both WASM binaries, application initialization, worker scope, and offline reload all work. It also records every HTTP request and fails if a repository-path build requests `/wasm/...`.
 
+## Canonical Web Serial byte provenance
+
+Web Preview #4 completed its functional browser and Pages gates, but the deployed read-only Web Serial WASM binary did not match the product asset locked by canonical CI. The selected source and canonical CI required SHA-256 `16a51b4e59498664241d92365bca56c3e9b34aa535154feab479fcfc3a46f3e3` at 62,823 bytes; a cache-bypassed fetch from the live deployment returned SHA-256 `ce764f8270c8a7faeb2f3ed6a8192407a1c60e33ec6d11d86b482edd38c1520e` at 62,943 bytes. The JavaScript bridge remained canonical. Functional success therefore did not establish byte provenance for that deployment, and its serial-WASM publication evidence is rejected. The physical early API-scope-gate observation remains behavioral evidence only; it is not accepted as proof of the deployed binary's provenance.
+
+The cause was deterministic pipeline drift, not evidence of malicious modification. Canonical CI builds the serial bridge with the audited `RUSTFLAGS` path remapping, runs the repository's pinned wasm-bindgen generator under isolated Rust 1.97.1 into `target/webserial-wasm-product-regenerated`, and verifies those bytes against both the committed product assets and `policy/webserial-wasm-assets.json`. The delivery workflow instead regenerated the bridge through its older `target/webserial-wasm-web` path, omitted those remapping and verifier controls, and then allowed `scripts/prepare_web_wasm.py` to replace the selected source's committed serial assets before the Vite build.
+
+Web Preview now uses the same serial pipeline as canonical CI. It installs product Rust 1.85 with the browser target and the isolated Rust 1.97.1 generator, applies the identical serial-only path remapping, generates into `target/webserial-wasm-product-regenerated`, and runs `scripts/verify_webserial_product_assets.py` before staging. All Web Serial browser gates consume that canonical directory. After staging, `git diff --exit-code` proves that both public serial assets remain byte-identical to the selected source; after the repository-subpath production build, byte comparisons prove the final Pages directory contains those same JavaScript and WASM bytes. Upload therefore occurs only after source, regeneration, staging, browser-test, and final-artifact provenance agree.
+
 ## Deterministic PWA updates
 
 `ADE_BUILD_SHA` is embedded into each production build and appended to the service-worker URL. Its exact commit value names the cache `smart-configurator-shell-<commit>`.
@@ -53,37 +61,11 @@ The checkout has credential persistence disabled. The Web build job has `actions
 
 ## Selected GitHub Actions policy
 
-The repository permits only explicit selected actions. `policy/github-actions-allowlist.json` separates three scopes:
+The repository permits only an explicit selected-action set. `policy/github-actions-allowlist.json` separates the six immutable full-SHA references required by the owner-controlled delivery workflows from one temporary, explicitly scoped canonical-CI exception: `actions/checkout@v7.0.1`.
 
-- `canonical_ci_temporary_exceptions`: the single temporary canonical-CI tag `actions/checkout@v7.0.1`;
-- `delivery_actions`: the six immutable full-SHA references written directly in the Web Preview and Android workflow files;
-- `delivery_transitive_actions`: immutable nested action references demonstrated from those pinned direct manifests.
+Delivery contract tests require every Web Preview and Android `uses:` reference to be a full 40-character SHA, require the delivery set to contain no unused entry, and fail if the canonical-CI tag appears in either delivery workflow. The canonical CI workflow is likewise constrained to the single declared exception so the tag cannot silently spread.
 
-Delivery contract tests require the direct Web Preview and Android `uses:` set to match `delivery_actions` exactly, require every direct and transitive delivery reference to be a 40-character SHA, reject wildcards, and fail if the canonical-CI exception spreads into either delivery scope. The canonical CI workflow remains constrained to its single declared exception.
-
-### Demonstrated transitive selected-action enforcement
-
-[Web Preview run #2](https://github.com/melyanneahmed-rgb/autonomous-drone-expert/actions/runs/32070083242) failed during GitHub's `Set up job` step, before checkout, because the selected-actions policy did not yet include `actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f`.
-
-The pinned direct action `actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9` is a composite action. Its exact `action.yml` (blob `82713b4cbb35ccf98dfa8f2e0deedc5e83b6d845`) contains at line 84:
-
-`uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0`
-
-GitHub selected-actions enforcement therefore applies to the nested immutable action as well as the direct workflow reference. The nested ref is recorded separately; it does not replace the direct Android artifact action `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`.
-
-### Exact pinned-manifest audit
-
-| Selected delivery action | Manifest kind | Nested `uses:` audit |
-| --- | --- | --- |
-| `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` | Node 24 (`action.yml` blob `5b0524f730db83f9513c18ab31a6c086c7239076`) | none |
-| `actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d` | Node 24 (`action.yml` blob `7ea02ee862bd1315b0be31625082750aa52ff896`) | none |
-| `actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128` | Node 24 (`action.yml` blob `113b639c9d6a6a0ab2e5fa904ea6949968e78be2`) | none |
-| `actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961` | Node 24 (`action.yml` blob `396e53c708fa14eaf6f45eaa50e8ae499c1aa498`) | none |
-| `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | Node 24 (`action.yml` blob `7cb4d1e81db55320b41217e1a78a1a46e3d2baef`) | none |
-| `actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9` | composite (`action.yml` blob `82713b4cbb35ccf98dfa8f2e0deedc5e83b6d845`) | exactly `actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f` |
-| `actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f` | transitive Node 24 (`action.yml` blob `7cb4d1e81db55320b41217e1a78a1a46e3d2baef`) | none |
-
-No other nested `uses:` dependency appears in the exact pinned manifests, so no other action is added. The repository Actions setting remains owner-controlled and must be updated separately with this one exact transitive ref; enabling broad GitHub-created, verified-creator, Marketplace, or wildcard access is neither required nor intended.
+The repository Actions setting must eventually match this exact selected set. A mismatch fails at workflow startup before checkout, builds, artifact upload, or deployment; enabling all marketplace actions is neither required nor intended. Converting the canonical CI checkout tag to a reviewed immutable SHA remains a separate follow-up and is not part of this delivery correction.
 
 ## Pages availability and confidentiality boundary
 
